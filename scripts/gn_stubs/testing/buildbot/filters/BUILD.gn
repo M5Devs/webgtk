@@ -1,0 +1,118 @@
+# Stub created by scripts/patch_gn_stubs.sh for the pruned engine archive.
+# The archive drops the whole //testing tree, but a few of its targets are
+# referenced from BUILD.gn files that the content build loads. WebGTK builds
+# no tests, so each is an empty group.
+group("base_unittests_filters") {
+}
+
+group("blink_platform_unittests") {
+}
+
+group("blink_platform_unittests_filters_bundle_data") {
+}
+
+group("blink_unittests_filters") {
+}
+
+group("blink_web_tests_filter") {
+}
+
+group("cc_unittests_filters") {
+}
+
+group("chromeos_filters") {
+}
+
+group("components_browsertests_use_blink_filters_bundle_data") {
+}
+
+group("components_unittests_filters") {
+}
+
+group("components_unittests_use_blink_filters_bundle_data") {
+}
+
+group("compositor_unittests_filters") {
+}
+
+group("compositor_unittests_filters_bundle_data") {
+}
+
+group("content_junit_tests_filters") {
+}
+
+group("content_shell_test_apk_filters") {
+}
+
+group("crashpad_tests_filters") {
+}
+
+group("device_unittests_filters") {
+}
+
+group("extensions_unittests_filters") {
+}
+
+group("gin_unittests_filters") {
+}
+
+group("gl_tests_filters") {
+}
+
+group("gl_unittests_filters") {
+}
+
+group("gpu_unittests_filters_bundle_data") {
+}
+
+group("gwp_asan_unittests_filters") {
+}
+
+group("ipc_tests_filters") {
+}
+
+group("leveldb_unittests_filters") {
+}
+
+group("linux_ozone_views_unittests_filters") {
+}
+
+group("media_unittests_filters") {
+}
+
+group("media_unittests_filters_bundle_data") {
+}
+
+group("mojo_unittests_filters") {
+}
+
+group("net_unittests_filters") {
+}
+
+group("ozone_unittests_filters") {
+}
+
+group("sandbox_linux_unittests_filters") {
+}
+
+group("services_unittests_filters") {
+}
+
+group("skia_unittests_filters") {
+}
+
+group("snapshot_unittests_filters") {
+}
+
+group("ui_base_unittests_filters") {
+}
+
+group("views_examples_unittests_filters") {
+}
+
+group("views_unittests_filters") {
+}
+
+group("viz_unittests_filters") {
+}
+

@@ -1,0 +1,10 @@
+# Stub created by scripts/patch_gn_stubs.sh for the pruned engine archive.
+# The archive drops the whole //testing tree, but a few of its targets are
+# referenced from BUILD.gn files that the content build loads. WebGTK builds
+# no tests, so each is an empty group.
+group("junit_test_support") {
+}
+
+group("junit_unit_tests") {
+}
+

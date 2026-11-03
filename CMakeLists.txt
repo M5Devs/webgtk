@@ -28,6 +28,8 @@ endif()
 
 option(WEBGTK_BUILD_TESTS "Build the WebGTK test suite" ON)
 option(WEBGTK_BUILD_DEMOS "Build the GTK3/GTK4 demos" ON)
+option(ENABLE_INTROSPECTION
+       "Generate GObject Introspection bindings when the tooling is present" ON)
 option(WEBGTK_ENABLE_SANITIZERS "Enable ASan/UBSan in Debug builds" ON)
 set(WEBGTK_ENGINE_DIR "" CACHE PATH
     "Chromium source tree to compile the engine backend against")
@@ -156,6 +158,84 @@ else()
                  "(run scripts/download_engine_prebuilt.sh to enable it)")
 endif()
 
+# ---- GObject Introspection -----------------------------------------------
+# A GIR + typelib per GTK major version, so the same shared libraries are
+# usable from PyGObject, JavaScript, Rust, Vala and friends. The two typelibs
+# must not share a name, so the GTK4 one is versioned "4.0"; a binding asks for
+# it with gi.require_version('WebGTK', '4.0').
+if(ENABLE_INTROSPECTION)
+  find_program(WEBGTK_GIR_SCANNER g-ir-scanner)
+  find_program(WEBGTK_GIR_COMPILER g-ir-compiler)
+  if(NOT WEBGTK_GIR_SCANNER OR NOT WEBGTK_GIR_COMPILER)
+    message(WARNING "g-ir-scanner/g-ir-compiler not found: "
+                    "introspection disabled (install gobject-introspection)")
+  endif()
+endif()
+
+function(webgtk_add_introspection target gtk_target nsversion gtk_major)
+  if(NOT ENABLE_INTROSPECTION OR NOT WEBGTK_GIR_SCANNER
+     OR NOT WEBGTK_GIR_COMPILER)
+    return()
+  endif()
+
+  set(gir "${CMAKE_CURRENT_BINARY_DIR}/WebGTK-${nsversion}.gir")
+  set(typelib "${CMAKE_CURRENT_BINARY_DIR}/WebGTK-${nsversion}.typelib")
+  set(header "${CMAKE_CURRENT_SOURCE_DIR}/include/webgtk/webgtk-view.h")
+
+  # The scanner links and runs a small program against the freshly built
+  # library, so it has to find it and, in Debug builds, the sanitizer runtime.
+  set(scanner_env
+      "LD_LIBRARY_PATH=${CMAKE_BINARY_DIR}:$ENV{LD_LIBRARY_PATH}"
+      "ASAN_OPTIONS=detect_leaks=0:verify_asan_link_order=0")
+  if(NOT WEBGTK_SANITIZE_FLAGS)
+    # Nothing to relax when the library is not instrumented.
+    list(REMOVE_AT scanner_env 1)
+  endif()
+
+  # The header selects the constructor with WEBGTK_GTK4, so the scanner must be
+  # told which flavour it is scanning or it would always see the GTK3 branch.
+  set(scan_cflags "")
+  if(gtk_major STREQUAL "gtk4")
+    set(scan_cflags --cflags-begin -DWEBGTK_GTK4=1 --cflags-end)
+  endif()
+
+  add_custom_command(
+    OUTPUT "${gir}"
+    COMMAND ${CMAKE_COMMAND} -E env ${scanner_env}
+            "${WEBGTK_GIR_SCANNER}"
+            --namespace=WebGTK --nsversion=${nsversion}
+            --identifier-prefix=WebGtk --symbol-prefix=webgtk
+            --include=GObject-2.0 --include=${gtk_target}
+            --library=${target} --library-path=$<TARGET_FILE_DIR:${target}>
+            --c-include=webgtk/webgtk-view.h
+            --add-include-path=${CMAKE_CURRENT_SOURCE_DIR}/include
+            -I${CMAKE_CURRENT_SOURCE_DIR}/include
+            -I${CMAKE_CURRENT_SOURCE_DIR}/src
+            ${scan_cflags}
+            --warn-all
+            --output=${gir}
+            ${header}
+    DEPENDS ${target} ${header}
+    COMMENT "Scanning ${target} for WebGTK-${nsversion}.gir"
+    VERBATIM)
+
+  add_custom_command(
+    OUTPUT "${typelib}"
+    COMMAND "${WEBGTK_GIR_COMPILER}" --output=${typelib} ${gir}
+    DEPENDS "${gir}"
+    COMMENT "Compiling WebGTK-${nsversion}.typelib"
+    VERBATIM)
+
+  add_custom_target(webgtk-gir-${gtk_major} ALL DEPENDS "${gir}" "${typelib}")
+  add_dependencies(webgtk-gir-${gtk_major} ${target})
+
+  install(FILES "${gir}" "${typelib}"
+          DESTINATION ${CMAKE_INSTALL_DATADIR}/gir-1.0)
+endfunction()
+
+webgtk_add_introspection(webgtk Gtk-3.0 1.0 gtk3)
+webgtk_add_introspection(webgtk4 Gtk-4.0 4.0 gtk4)
+
 # ---- Demos ---------------------------------------------------------------
 if(WEBGTK_BUILD_DEMOS)
   add_executable(gtk3-demo examples/webgtk_demo.cc)
@@ -170,6 +250,20 @@ endif()
 if(WEBGTK_BUILD_TESTS)
   enable_testing()
   find_program(WEBGTK_XVFB xvfb-run)
+
+  # The Python demo needs an interpreter with PyGObject. The one CMake finds may
+  # not have it (a virtualenv without system site-packages, say), so probe.
+  find_package(Python3 COMPONENTS Interpreter QUIET)
+  set(WEBGTK_PYTHON "")
+  foreach(candidate ${Python3_EXECUTABLE} /usr/bin/python3)
+    if(NOT WEBGTK_PYTHON AND candidate)
+      execute_process(COMMAND ${candidate} -c "import gi"
+                      RESULT_VARIABLE _gi_status OUTPUT_QUIET ERROR_QUIET)
+      if(_gi_status EQUAL 0)
+        set(WEBGTK_PYTHON ${candidate})
+      endif()
+    endif()
+  endforeach()
 
   # test_webgtk.c is plain C: it proves the ABI needs no C++ or GObject headers.
   add_executable(test-webgtk tests/test_webgtk.c)
@@ -207,5 +301,23 @@ if(WEBGTK_BUILD_TESTS)
                      --selftest)
     set_tests_properties(webgtk-demo-gtk3-selftest webgtk-demo-gtk4-selftest
                          PROPERTIES ENVIRONMENT "${WEBGTK_TEST_ENV}")
+  endif()
+
+  # The same checks, but through PyGObject: proves the typelib is usable, not
+  # merely well formed. Needs introspection to have produced the typelibs.
+  if(WEBGTK_PYTHON AND WEBGTK_GIR_SCANNER AND WEBGTK_GIR_COMPILER)
+    set(WEBGTK_PYTHON_ENV "${WEBGTK_TEST_ENV};GI_TYPELIB_PATH=${CMAKE_BINARY_DIR};LD_LIBRARY_PATH=${CMAKE_BINARY_DIR};ASAN_OPTIONS=detect_leaks=0:verify_asan_link_order=0")
+    add_test(NAME webgtk-python-gtk3-selftest
+             COMMAND ${WEBGTK_TEST_LAUNCHER} ${WEBGTK_PYTHON}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/examples/demo.py --selftest
+                     --gtk3)
+    add_test(NAME webgtk-python-gtk4-selftest
+             COMMAND ${WEBGTK_TEST_LAUNCHER} ${WEBGTK_PYTHON}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/examples/demo.py --selftest)
+    set_tests_properties(webgtk-python-gtk3-selftest webgtk-python-gtk4-selftest
+                         PROPERTIES ENVIRONMENT "${WEBGTK_PYTHON_ENV}")
+  else()
+    message(STATUS "WebGTK: python demo tests skipped "
+                   "(need PyGObject and the introspection tools)")
   endif()
 endif()

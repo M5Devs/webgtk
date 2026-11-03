@@ -1,0 +1,27 @@
+# Stub created by scripts/patch_gn_stubs.sh for the pruned
+# engine archive: the real tree is absent, so these targets
+# are empty groups that keep dep labels resolvable.
+
+group("zucchini_disassembler_elf_fuzzer") {
+}
+
+group("zucchini_apply_fuzzer") {
+}
+
+group("zucchini_disassembler_dex_fuzzer") {
+}
+
+group("zucchini_disassembler_win32_fuzzer") {
+}
+
+group("zucchini_imposed_ensemble_matcher_fuzzer") {
+}
+
+group("zucchini_patch_fuzzer") {
+}
+
+group("zucchini_raw_gen_fuzzer") {
+}
+
+group("zucchini_ztf_gen_fuzzer") {
+}

@@ -133,21 +133,34 @@ if [ "$DO_GEN" = 0 ]; then
 fi
 
 # ---------------------------------------------------------------------- gn gen
-# Diet flags: content-only root target, no component build, no NaCl/printing/
-# PDF/WebRTC/extensions, no thin LTO, system sysroot, no Vulkan/remoting.
+# Diet flags: content-only root target, no component build, no printing/PDF/
+# extensions, no thin LTO, system sysroot, no Vulkan/remoting.
+#
+# enable_nacl and enable_webrtc no longer exist as build args at this revision,
+# so passing them only produces "no effect" warnings; the features are dropped
+# by other means.
 #
 # use_kerberos=false: the pruned tree does not vendor third_party/kerberos, so
 # Negotiate/SPNEGO auth is dropped rather than pulling in a GSSAPI dependency.
-# enable_rust=false: the archive ships no Rust toolchain.
+# enable_rust must stay true: //base and //net declare Rust targets
+# unconditionally, and build/rust asserts on enable_rust, so a false value
+# aborts gn gen. The archive keeps third_party/rust-toolchain, which is all gn
+# needs at generation time.
 DIET_ARGS='is_debug=false is_component_build=false symbol_level=0
-enable_nacl=false enable_printing=false enable_pdf=false enable_webrtc=false
+enable_printing=false enable_pdf=false
 enable_extensions=false use_thin_lto=false use_sysroot=false
 enable_webui_ntp=false enable_vulkan=false enable_remoting=false
-use_kerberos=false enable_rust=false'
+use_kerberos=false enable_rust=true'
 DIET_ARGS="$(echo $DIET_ARGS)"
 
 log "Running gn gen (root target //content)"
 cd "$SRC_DIR"
+# GN loads ~140 files the pruned archive drops, even though WebGTK never builds
+# those subtrees. scripts/patch_gn_stubs.sh writes the hand-written ones and
+# scripts/apply_gn_stubs.py replays the snapshot the stub driver discovered.
+log "Restoring missing GN files"
+"$REPO_ROOT/scripts/patch_gn_stubs.sh" "$SRC_DIR"
+"$REPO_ROOT/scripts/apply_gn_stubs.py" "$SRC_DIR"
 if "$GN" gen out/webgtk --root-target=//content --args="$DIET_ARGS"; then
   log "gn gen succeeded: $SRC_DIR/out/webgtk"
   echo "Build the engine with:"

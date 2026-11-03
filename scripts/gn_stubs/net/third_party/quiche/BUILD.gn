@@ -1,0 +1,35 @@
+# Stub created by scripts/patch_gn_stubs.sh for the pruned engine archive.
+# The archive drops the QUICHE source, and the real BUILD.gn expands into
+# hundreds of generated targets that only exist in a full checkout.
+# Only these targets are referenced from outside //net/third_party/quiche,
+# so they are the ones that must stay resolvable for `gn gen`.
+
+group("quiche") {
+}
+
+group("quiche_tool_support") {
+}
+
+group("blind_sign_auth") {
+}
+
+group("quiche_tests") {
+}
+
+group("quiche_test_support") {
+}
+
+group("quic_server_core") {
+}
+
+group("quic_client_core") {
+}
+
+group("net_quic_test_tools_proto") {
+}
+
+group("blind_sign_auth_test_support") {
+}
+
+group("blind_sign_auth_proto") {
+}

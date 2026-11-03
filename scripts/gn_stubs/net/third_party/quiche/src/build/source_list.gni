@@ -1,0 +1,26 @@
+# Stub created by scripts/patch_gn_stubs.sh for the pruned engine archive.
+# The archive drops the QUICHE source; the real file is generated from
+# the QUICHE source tree. WebGTK only needs `gn gen` to parse, so every
+# source list is empty.
+binary_http_hdrs = []
+binary_http_srcs = []
+epoll_quic_client = []
+epoll_quic_server = []
+epoll_test_support = []
+epoll_tool_support = []
+io_test_support_hdrs = []
+io_test_support_srcs = []
+io_tool_support_hdrs = []
+io_tool_support_srcs = []
+masque_private_tokens_hdrs = []
+masque_private_tokens_srcs = []
+masque_support_hdrs = []
+masque_support_srcs = []
+oblivious_http_hdrs = []
+oblivious_http_srcs = []
+quiche_core_hdrs = []
+quiche_core_srcs = []
+quiche_test_support_hdrs = []
+quiche_test_support_srcs = []
+quiche_tool_support_hdrs = []
+quiche_tool_support_srcs = []

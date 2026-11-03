@@ -1,0 +1,13 @@
+# Minimal stand-in for //chrome/version.gni.
+# Stub created by scripts/patch_gn_stubs.sh for the pruned engine archive.
+#
+# The real file shells out to build/util/version.py to parse //chrome/VERSION.
+# The archive drops //chrome, and nothing WebGTK builds consumes the Chrome
+# version, so expose the same variables with fixed values instead.
+chrome_version_file = "//chrome/VERSION"
+
+chrome_version_full = "143.0.7499.0"
+chrome_version_major = "143"
+chrome_version_minor = "0"
+chrome_version_build = "7499"
+chrome_version_patch = "0"

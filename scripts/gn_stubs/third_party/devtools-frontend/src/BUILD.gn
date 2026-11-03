@@ -1,0 +1,26 @@
+# Stub created by scripts/patch_gn_stubs.sh for the pruned
+# engine archive: the real tree is absent, so these targets
+# are empty groups that keep dep labels resolvable.
+
+group("devtools_frontend_resources") {
+}
+
+group("devtools_all_files") {
+}
+
+# Emits the .grd that //content/browser/devtools:devtools_resources reads.
+action("generate_devtools_grd") {
+  script = "//build/webgtk_stub_touch.py"
+  outputs = [ "$root_gen_dir/third_party/devtools-frontend/src/front_end/devtools_resources.grd" ]
+  args = rebase_path(outputs, root_build_dir)
+}
+
+# Emits the overlay .grd/.js that //third_party/blink/public reads.
+action("generate_devtools_inspector_overlay_resources") {
+  script = "//build/webgtk_stub_touch.py"
+  outputs = [
+    "$root_out_dir/resources/inspector_overlay/inspector_overlay_resources.grd",
+    "$root_out_dir/resources/inspector_overlay/main.js",
+  ]
+  args = rebase_path(outputs, root_build_dir)
+}

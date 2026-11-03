@@ -4,6 +4,9 @@ build-*/
 out/
 cmake-build-*/
 
+# g-ir-scanner leaves a probe translation unit in the source tree on failure
+g-ir-cpp-*.c
+
 # Vendored engine and downloaded archives
 chromium/
 engine/
@@ -19,3 +22,8 @@ engine/
 .idea/
 *.swp
 .DS_Store
+
+# ...and finally, the committed GN stub snapshot must win over every rule
+# above (its paths mirror engine paths like "build/" and "chrome/.../chromium/").
+!scripts/gn_stubs/
+!scripts/gn_stubs/**

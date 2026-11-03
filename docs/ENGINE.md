@@ -125,6 +125,41 @@ are gone. `scripts/check_engine_deps.py <tree>` lists every GN file the tree
 references but does not contain, which is the fastest way to see the remaining
 gap.
 
+### Reaching a clean `gn gen`
+
+The pruned tree is missing ~140 GN files that `gn gen` loads at parse time even
+though WebGTK never builds the subtrees they belong to. Three scripts close the
+gap:
+
+| script | role |
+| --- | --- |
+| `scripts/patch_gn_stubs.sh` | hand-written stubs for the subtle cases (templates that must re-export an import, flags a file must declare) |
+| `scripts/gen_stub_driver.py` | runs `gn gen` in a loop, stubbing whatever it reports missing, until the parse is clean |
+| `scripts/collect_gn_stubs.py` / `scripts/apply_gn_stubs.py` | freeze the discovered stubs into `scripts/gn_stubs/` and replay them onto a fresh tree |
+
+On a freshly extracted archive, prime the tree and generate (this is what
+`scripts/setup_engine.sh` now does automatically):
+
+```sh
+ENGINE_ROOT=${WEBGTK_ENGINE_DIR:-engine}
+SRC=$ENGINE_ROOT/chromium
+scripts/patch_gn_stubs.sh "$SRC"
+python3 scripts/apply_gn_stubs.py "$SRC"
+"$ENGINE_ROOT/gnroot/gn" gen "$SRC/out/webgtk" --root-target=//content \
+  --args="$DIET_ARGS"
+```
+
+`scripts/gn_stubs/` is the committed snapshot of every stub the driver found;
+`MANIFEST` lists them and `DATA_FILES` marks the few markerless data files
+(`chrome/VERSION`, the `BRANDING` file). Most stubs are empty `group()`
+targets; a handful are `config()` (Chromium names those `*_config`), and a few
+are `action()`s that emit a file another target's `grit()` reads.
+
+`scripts/gen_stub_driver.py` is the search tool, not part of the normal build:
+it exists so that a new tree revision can rediscover the set rather than have
+the snapshot guessed at. `gn gen` against the primed tree completes in about
+three seconds and produces ~17k targets.
+
 ### Build arguments
 
 `scripts/build_engine_artifact.sh` sets these:

@@ -1,0 +1,14 @@
+# Stub created by scripts/patch_gn_stubs.sh for the pruned engine archive.
+# The real Dawn tree is absent. //skia/BUILD.gn uses ":public" in configs +=,
+# so it must be a config; the other labels are used as deps and stay groups.
+group("cpp_headers") {
+}
+
+group("headers") {
+}
+
+group("cpp_headers_gen") {
+}
+
+config("public") {
+}

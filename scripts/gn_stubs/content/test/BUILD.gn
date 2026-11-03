@@ -1,0 +1,32 @@
+# Stub created by scripts/patch_gn_stubs.sh for the pruned
+# engine archive: the real tree is absent, so these targets
+# are empty groups that keep dep labels resolvable.
+
+group("test_support") {
+}
+
+group("browsertest_support") {
+}
+
+group("content_test_mojo_bindings") {
+}
+
+# The real target is a grit() that emits these two paks; the archive drops the
+# grit inputs, so stand in with an action that only has to declare them.
+action("web_ui_mojo_test_resources") {
+  script = "//build/webgtk_stub_touch.py"
+  outputs = [
+    "$root_gen_dir/content/test/web_ui_mojo_test_resources.pak",
+    "$root_gen_dir/content/test/web_ui_mojo_test_resources.pak.info",
+  ]
+  args = rebase_path(outputs, root_build_dir)
+}
+
+group("blink_test_browser_support") {
+}
+
+group("mojo_bindings_web_test_mojom") {
+}
+
+group("mojo_web_test_bindings") {
+}

@@ -1,0 +1,9 @@
+# Stub created by scripts/patch_gn_stubs.sh for the pruned engine archive.
+# The real Vulkan-Headers tree is absent. ":vulkan_headers" is used as a dep
+# (a target), while ":vulkan_headers_config" is used in configs += (a config),
+# so the two must have different GN types.
+group("vulkan_headers") {
+}
+
+config("vulkan_headers_config") {
+}

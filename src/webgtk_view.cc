@@ -19,6 +19,7 @@
 #include <new>
 
 #include <webgtk/webgtk.h>
+#include <webgtk/webgtk-view.h>
 
 #include "webgtk_backend_ops.h"
 
@@ -262,7 +263,10 @@ void blitter_draw(GlBlitter *blitter, const webgtk::Bitmap &bitmap) {
 
 }  // namespace
 
+/* The instance. First member must be GObject so the GObject macros work. */
 struct webgtk_view {
+  GObject parent_instance;
+
   GtkWidget *area;
   GtkIMContext *im_context;
   const webgtk::BackendOps *ops;
@@ -278,6 +282,164 @@ struct webgtk_view {
   int width;
   int height;
 };
+
+namespace {
+
+/* Queued on the main context so the signal is always emitted from the GTK
+ * main thread, even when the backend answers synchronously from another. */
+struct JsEmission {
+  webgtk_view *view;
+  char *json;
+};
+
+gboolean emit_js_result(gpointer data) {
+  auto *emission = static_cast<JsEmission *>(data);
+  if (!emission->view->destroyed)
+    g_signal_emit_by_name(emission->view, "javascript-result", emission->json);
+  g_object_unref(emission->view);
+  g_free(emission->json);
+  delete emission;
+  return G_SOURCE_REMOVE;
+}
+
+void on_js_result(const char *json, void *user_data) {
+  auto *emission = new (std::nothrow) JsEmission;
+  if (!emission) return;
+  emission->view = WEBGTK_VIEW(user_data);
+  emission->json = g_strdup(json ? json : "null");
+  g_object_ref(emission->view);
+  g_main_context_invoke(nullptr, emit_js_result, emission);
+}
+
+/* Tears down everything the instance owns. Idempotent, and called both from
+ * dispose() and from the C ABI's webgtk_view_destroy(). */
+void teardown(webgtk_view *view) {
+  if (view->destroyed) return;
+  view->destroyed = true;
+
+  if (view->area) {
+    GtkWidget *area = view->area;
+    view->area = nullptr;
+    g_object_set_data(G_OBJECT(area), "webgtk-view", nullptr);
+    /* Detach first so the container cannot deliver further signals to a view
+     * that is going away; dropping our reference then finalises the widget. */
+    GtkWidget *parent = gtk_widget_get_parent(area);
+    if (parent) {
+#if WEBGTK_GTK4
+      gtk_window_set_child(GTK_WINDOW(parent), nullptr);
+#else
+      gtk_container_remove(GTK_CONTAINER(parent), area);
+#endif
+    }
+    g_object_unref(area);
+  }
+  if (view->im_context) {
+    g_object_unref(view->im_context);
+    view->im_context = nullptr;
+  }
+  if (view->ops && view->backend) {
+    view->ops->destroy(view->backend);
+    view->backend = nullptr;
+  }
+  std::free(view->frame.data);
+  view->frame.data = nullptr;
+  view->frame_capacity = 0;
+  view->frame = webgtk::Bitmap{};
+}
+
+/* Builds the backing GtkGLArea and wires every input path to `view`. */
+GtkWidget *create_area(webgtk_view *view);
+
+}  // namespace
+
+/* GObject plumbing lives in extern "C" so the generated
+ * webgtk_view_get_type() has C linkage and matches the public header. */
+extern "C" {
+
+G_DEFINE_TYPE(WebGtkView, webgtk_view, G_TYPE_OBJECT)
+
+static void webgtk_view_init(webgtk_view *view) {
+  view->area = nullptr;
+  view->im_context = nullptr;
+  view->ops = nullptr;
+  view->backend = nullptr;
+  view->frame = webgtk::Bitmap{};
+  view->frame_capacity = 0;
+  view->blitter = GlBlitter{};
+  view->realized = false;
+  view->gl_failed = false;
+  view->destroyed = false;
+  view->width = 0;
+  view->height = 0;
+}
+
+static void webgtk_view_dispose(GObject *object) {
+  teardown(WEBGTK_VIEW(object));
+  G_OBJECT_CLASS(webgtk_view_parent_class)->dispose(object);
+}
+
+static void webgtk_view_finalize(GObject *object) {
+  auto *view = WEBGTK_VIEW(object);
+  /* Last line of defence: the GL context may still be current during dispose,
+   * so the blitter is released here, after the widget is gone. */
+  if (view->blitter.ready) blitter_shutdown(&view->blitter);
+  G_OBJECT_CLASS(webgtk_view_parent_class)->finalize(object);
+}
+
+/* Property ids, kept in one place. */
+enum {
+  PROP_0,
+  PROP_WIDGET,
+  PROP_BACKEND_NAME,
+};
+
+static void webgtk_view_get_property(GObject *object, guint prop_id,
+                                     GValue *value, GParamSpec *spec) {
+  auto *view = WEBGTK_VIEW(object);
+  switch (prop_id) {
+    case PROP_WIDGET:
+      g_value_set_object(value, view->area);
+      break;
+    case PROP_BACKEND_NAME:
+      g_value_set_string(value, view->ops ? view->ops->name() : "");
+      break;
+    default:
+      G_OBJECT_WARN_INVALID_PROPERTY_ID(object, prop_id, spec);
+      break;
+  }
+}
+
+static void webgtk_view_class_init(WebGtkViewClass *klass) {
+  auto *object_class = G_OBJECT_CLASS(klass);
+  object_class->dispose = webgtk_view_dispose;
+  object_class->finalize = webgtk_view_finalize;
+  object_class->get_property = webgtk_view_get_property;
+
+  /*
+   * "widget" is the child to add to a container. It is a read-only object
+   * property rather than a GtkContainer child because WebGtkView is a plain
+   * GObject: the widget is the embeddable surface, the view is the controller.
+   */
+  g_object_class_install_property(
+      object_class, PROP_WIDGET,
+      g_param_spec_object("widget", "Widget",
+                          "The GtkGLArea to add to a container", GTK_TYPE_WIDGET,
+                          (GParamFlags)(G_PARAM_READABLE |
+                                        G_PARAM_STATIC_STRINGS)));
+
+  g_object_class_install_property(
+      object_class, PROP_BACKEND_NAME,
+      g_param_spec_string("backend-name", "Backend name",
+                          "Name of the active rendering backend", "",
+                          (GParamFlags)(G_PARAM_READABLE |
+                                        G_PARAM_STATIC_STRINGS)));
+
+  g_signal_new("javascript-result", WEBGTK_TYPE_VIEW, G_SIGNAL_RUN_LAST, 0,
+               nullptr, nullptr, g_cclosure_marshal_VOID__STRING,
+               G_TYPE_NONE, 1, G_TYPE_STRING);
+}
+
+}  // extern "C"
 
 namespace {
 
@@ -533,56 +695,50 @@ GtkWidget *create_area(webgtk_view *view) {
 
 extern "C" {
 
-webgtk_view *webgtk_view_new(int width, int height) {
+/* Shared by the C ABI constructor and the GTK-major-specific ones. */
+static webgtk_view *webgtk_view_construct(int width, int height) {
   if (!valid_size(width, height)) return nullptr;
 
-  auto *view = new (std::nothrow) webgtk_view{};
-  if (!view) return nullptr;
+  auto *view = WEBGTK_VIEW(g_object_new(WEBGTK_TYPE_VIEW, nullptr));
 
   view->width = width;
   view->height = height;
   view->ops = webgtk::default_backend();
   if (!view->ops) {
-    delete view;
+    g_object_unref(view);
     return nullptr;
   }
   view->backend = view->ops->create(width, height);
   if (!view->backend) {
-    delete view;
+    g_object_unref(view);
     return nullptr;
   }
   view->area = create_area(view);
+  if (!view->area) {
+    g_object_unref(view);
+    return nullptr;
+  }
   return view;
 }
 
+webgtk_view *webgtk_view_new(int width, int height) {
+  return webgtk_view_construct(width, height);
+}
+
+#if defined(WEBGTK_GTK4) && WEBGTK_GTK4
+WebGtkView *webgtk_view_new_gtk4(int width, int height) {
+  return webgtk_view_construct(width, height);
+}
+#else
+WebGtkView *webgtk_view_new_gtk3(int width, int height) {
+  return webgtk_view_construct(width, height);
+}
+#endif
+
 void webgtk_view_destroy(webgtk_view *view) {
   if (!view) return;
-  view->destroyed = true;
-
-  if (view->area) {
-    GtkWidget *area = view->area;
-    view->area = nullptr;
-    g_object_set_data(G_OBJECT(area), "webgtk-view", nullptr);
-    // Detach first so the container cannot deliver further signals to this
-    // view; dropping our reference then finalises the widget.
-    GtkWidget *parent = gtk_widget_get_parent(area);
-    if (parent) {
-#if WEBGTK_GTK4
-      gtk_window_set_child(GTK_WINDOW(parent), nullptr);
-#else
-      gtk_container_remove(GTK_CONTAINER(parent), area);
-#endif
-    }
-    g_object_unref(area);
-  }
-  if (view->im_context) {
-    g_object_unref(view->im_context);
-    view->im_context = nullptr;
-  }
-  if (view->ops && view->backend) view->ops->destroy(view->backend);
-
-  std::free(view->frame.data);
-  delete view;
+  teardown(view);
+  g_object_unref(view);
 }
 
 void *webgtk_view_get_widget(webgtk_view *view) {
@@ -686,4 +842,63 @@ const char *webgtk_status_string(webgtk_status status) {
   return "unknown";
 }
 
+/* ------------------------------------------- introspection-only entry points */
+
+webgtk_status webgtk_view_load_html_string(WebGtkView *view, const char *html) {
+  if (!view || !html) return WEBGTK_ERROR_INVALID_ARGUMENT;
+  return view->ops->load_html(view->backend, html, std::strlen(html));
+}
+
+webgtk_status webgtk_view_run_javascript(WebGtkView *view, const char *script) {
+  if (!view || !script) return WEBGTK_ERROR_INVALID_ARGUMENT;
+  return view->ops->evaluate_javascript(view->backend, script, on_js_result,
+                                        view);
+}
+
+GBytes *webgtk_view_render_frame(WebGtkView *view) {
+  if (!view) return nullptr;
+  webgtk::Bitmap bitmap{};
+  if (view->ops->render(view->backend, &bitmap) != WEBGTK_OK) return nullptr;
+  if (!publish_frame(view, bitmap)) return nullptr;
+  return g_bytes_new(view->frame.data, view->frame.byte_size());
+}
+
 }  // extern "C"
+
+/* ------------------------------------------------------------ enum GTypes -- */
+
+/* Hand-written boxed enum GTypes. g-ir-scanner picks these up from the
+ * "get_type" naming convention, which is what turns the two C enums into real
+ * Python enums instead of bare ints. */
+GType webgtk_status_get_type(void) {
+  static gsize id = 0;
+  if (g_once_init_enter(&id)) {
+    static const GEnumValue values[] = {
+        {WEBGTK_OK, "WEBGTK_OK", "ok"},
+        {WEBGTK_ERROR_INVALID_ARGUMENT, "WEBGTK_ERROR_INVALID_ARGUMENT",
+         "invalid-argument"},
+        {WEBGTK_ERROR_NOT_IMPLEMENTED, "WEBGTK_ERROR_NOT_IMPLEMENTED",
+         "not-implemented"},
+        {WEBGTK_ERROR_INTERNAL, "WEBGTK_ERROR_INTERNAL", "internal"},
+        {0, nullptr, nullptr},
+    };
+    GType type = g_enum_register_static("WebGtkStatus", values);
+    g_once_init_leave(&id, type);
+  }
+  return (GType)id;
+}
+
+GType webgtk_mouse_button_get_type(void) {
+  static gsize id = 0;
+  if (g_once_init_enter(&id)) {
+    static const GEnumValue values[] = {
+        {WEBGTK_MOUSE_LEFT, "WEBGTK_MOUSE_LEFT", "left"},
+        {WEBGTK_MOUSE_MIDDLE, "WEBGTK_MOUSE_MIDDLE", "middle"},
+        {WEBGTK_MOUSE_RIGHT, "WEBGTK_MOUSE_RIGHT", "right"},
+        {0, nullptr, nullptr},
+    };
+    GType type = g_enum_register_static("WebGtkMouseButton", values);
+    g_once_init_leave(&id, type);
+  }
+  return (GType)id;
+}

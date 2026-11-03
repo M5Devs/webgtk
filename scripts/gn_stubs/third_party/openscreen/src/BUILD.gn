@@ -1,0 +1,9 @@
+# Stub created by scripts/patch_gn_stubs.sh for the pruned engine archive.
+# The real Open Screen tree is absent. //components/mirroring and
+# //media/cast/openscreen use ":include_dirs" as a config (configs +=), so it
+# must be a config here; the other targets stay empty groups.
+config("include_dirs") {
+}
+
+group("build_config") {
+}

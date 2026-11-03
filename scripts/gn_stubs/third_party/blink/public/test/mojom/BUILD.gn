@@ -1,0 +1,15 @@
+# Stub created by scripts/patch_gn_stubs.sh for the pruned
+# engine archive: the real tree is absent, so these targets
+# are empty groups that keep dep labels resolvable.
+
+group("modules_test_automation_blink") {
+}
+
+group("core_test_automation") {
+}
+
+group("modules_test_automation") {
+}
+
+group("core_test_automation_blink") {
+}

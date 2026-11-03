@@ -1,0 +1,30 @@
+# Stub created by scripts/patch_gn_stubs.sh for the pruned
+# engine archive: the real tree is absent, so these targets
+# are empty groups that keep dep labels resolvable.
+
+group("test_support") {
+}
+
+group("histogram_tester") {
+}
+
+group("task_environment") {
+}
+
+group("scoped_feature_list") {
+}
+
+group("test_config") {
+}
+
+group("test_proto") {
+}
+
+group("fuzztest_support") {
+}
+
+group("proto_test_support") {
+}
+
+group("run_all_unittests") {
+}

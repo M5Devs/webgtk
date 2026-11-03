@@ -9,13 +9,15 @@ majors and needs no compositor.
 
 ```
 include/webgtk/webgtk.h   Public C ABI (the only supported embedder interface)
+include/webgtk/webgtk-view.h  GObject Introspection surface (bindings)
 src/webgtk_backend_ops.h  Backend vtable: the seam between view and engine
 src/webgtk_view.cc        GObject view wrapping GtkGLArea (GTK3 + GTK4)
 src/backend_mock.cc       Deterministic software backend, no engine required
 src/backend_chromium.cc   Real Blink/V8 backend (built when an engine is set)
 examples/webgtk_demo.cc   Embedder demo, built for GTK3 and GTK4
+examples/demo.py          PyGObject demo, drives the typelib only
 tests/test_webgtk.c       C ABI and behaviour tests
-scripts/                  Engine download/build tooling
+scripts/                  Engine download/build tooling and GN stubs
 .github/workflows/        Engine build and publish pipeline
 docs/ENGINE.md            Engine integration notes and current status
 ```
@@ -78,6 +80,34 @@ which is also how the headless tests assert on output.
 `webgtk_view_destroy` releases everything the view owns. If the widget was added
 to a container it is detached first; the view holds its own reference to the
 widget, so it is safe to destroy the view before or after the window.
+
+## Language bindings
+
+The same libraries ship GObject Introspection data, so the view is usable from
+any GI-aware language with no C glue. A typelib is built per GTK major version
+(`WebGTK-1.0` for GTK3, `WebGTK-4.0` for GTK4), next to the shared library:
+
+```sh
+cmake -S . -B build -DENABLE_INTROSPECTION=ON   # default; needs g-ir-scanner
+GI_TYPELIB_PATH=build LD_LIBRARY_PATH=build python3 examples/demo.py
+```
+
+```python
+import gi
+gi.require_version("WebGTK", "1.0")
+from gi.repository import Gtk, WebGTK
+
+view = WebGTK.View.new_gtk3(800, 600)
+view.load_html_string("<h1>Hello</h1>")
+view.connect("javascript-result", lambda _v, json: print(json))
+view.run_javascript("1 + 1")
+window.add(view.widget)
+```
+
+`WebGtkView` is a real GObject that *composes* a `GtkGLArea`; the widget to add
+to a container is the read-only `widget` property. The flat C ABI in
+`<webgtk/webgtk.h>` stays dependency-free for embedders that only want the
+handful of functions.
 
 ## License
 

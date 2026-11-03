@@ -1,0 +1,13 @@
+# Minimal stand-in for //third_party/cast_core/public/src/proto/proto.gni.
+# Stub created by scripts/patch_gn_stubs.sh for the pruned engine archive.
+#
+# The archive drops the Cast Core tree. //components/policy/test_support imports
+# this file for the cast_core_grpc_library() template and reads is_cfi from the
+# same scope, so import the sanitizer args and stub the template.
+import("//build/config/sanitizers/sanitizers.gni")
+
+template("cast_core_grpc_library") {
+  not_needed(invoker, "*")
+  group(target_name) {
+  }
+}

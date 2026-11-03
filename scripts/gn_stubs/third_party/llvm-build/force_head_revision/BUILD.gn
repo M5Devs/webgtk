@@ -1,0 +1,5 @@
+# Stub created by scripts/patch_gn_stubs.sh for the pruned engine archive.
+# The archive omits this third-party tree; the diet build never compiles
+# these targets, it only references them as deps.
+group("all") {
+}
