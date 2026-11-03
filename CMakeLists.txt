@@ -48,6 +48,9 @@ if(WEBGTK_ENABLE_SANITIZERS AND CMAKE_BUILD_TYPE STREQUAL "Debug"
 endif()
 
 set(WEBGTK_SOURCES src/backend_mock.cc src/webgtk_view.cc)
+if(WEBGTK_ENGINE_DIR)
+  list(APPEND WEBGTK_SOURCES src/backend_chromium.cc)
+endif()
 
 # One object library per GTK major version: webgtk_view.cc is compiled twice
 # with different WEBGTK_GTK4 settings, so the two shared libraries can never
@@ -59,9 +62,12 @@ function(webgtk_add_objects target gtk_target)
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
   target_link_libraries(${target} PUBLIC ${gtk_target} epoxy)
   if(WEBGTK_ENGINE_DIR)
-    target_include_directories(${target}
-      PRIVATE ${WEBGTK_ENGINE_DIR}/include)
     target_compile_definitions(${target} PUBLIC WEBGTK_HAVE_ENGINE=1)
+    # A Chromium embedder compiles against the checkout, not a staged SDK:
+    # out/<name>/gen holds generated headers, the root holds the rest.
+    target_include_directories(${target} PRIVATE
+      ${WEBGTK_ENGINE_DIR}/chromium
+      ${WEBGTK_ENGINE_DIR}/chromium/out/webgtk/gen)
   endif()
 endfunction()
 

@@ -12,8 +12,11 @@ include/webgtk/webgtk.h   Public C ABI (the only supported embedder interface)
 src/webgtk_backend_ops.h  Backend vtable: the seam between view and engine
 src/webgtk_view.cc        GObject view wrapping GtkGLArea (GTK3 + GTK4)
 src/backend_mock.cc       Deterministic software backend, no engine required
+src/backend_chromium.cc   Real Blink/V8 backend (built when an engine is set)
 examples/webgtk_demo.cc   Embedder demo, built for GTK3 and GTK4
 tests/test_webgtk.c       C ABI and behaviour tests
+scripts/                  Engine fetch/prepare and dependency checker
+docs/ENGINE.md            Engine integration notes and current status
 ```
 
 The view never talks to Blink, V8 or the mock directly. Everything engine
@@ -37,16 +40,18 @@ LeakSanitizer would otherwise report.
 
 ## Linking the engine
 
-The Blink/V8 archive is optional. Without it everything builds and tests against
-the mock backend. To link the real engine, point the build at a tree containing
-`include/` and `lib/`:
+The Blink/V8 engine is optional. Without it everything builds and tests against
+the mock backend. To build the real backend, point the build at an engine tree:
 
 ```sh
 cmake -S . -B build -DWEBGTK_ENGINE_DIR=/path/to/engine
 ```
 
-That defines `WEBGTK_HAVE_ENGINE`, links `libwebgtk_engine`, and switches
-`default_backend()` from the mock to the engine.
+That adds `src/backend_chromium.cc`, defines `WEBGTK_HAVE_ENGINE`, and adds the
+engine root and `out/webgtk/gen` to the include path. `scripts/setup_engine.sh`
+downloads and prepares the engine; `scripts/check_engine_deps.py` reports which
+inputs a pruned checkout is still missing. See `docs/ENGINE.md` for the current
+state of the integration.
 
 ## Using a view
 
