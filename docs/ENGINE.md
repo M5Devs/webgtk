@@ -7,111 +7,178 @@ it:
 | backend | file | built when |
 | --- | --- | --- |
 | mock | `src/backend_mock.cc` | always |
-| Chromium | `src/backend_chromium.cc` | `-DWEBGTK_ENGINE_DIR=<dir>` |
+| Chromium | `src/backend_chromium.cc` | an engine is configured |
 
 The mock backend renders synthetic frames, so the widget, the demos and the
 headless test suite work with no engine at all. That is the default build.
 
-## What the engine archive actually is
+## The rule: nobody compiles Chromium to use WebGTK
 
-The archive at
-`https://huggingface.co/datasets/M5-Dev/webgtk-chromium-diet/resolve/main/webgtk_core_v2.tar.gz`
-(685 MB) is a **pruned Chromium source tree**, not a prebuilt engine. After
-extraction it is 2.7 GB / ~200k files of `.cc` and `.h`, with no build outputs.
-
-It is missing the inputs `gn gen` needs, so it cannot be built as published:
-
-- `testing/` (the whole directory) — `media/media_options.gni` and `content`
-  import `//testing/libfuzzer/fuzzer_test.gni` and `//testing/test.gni`
-- `third_party/libevent`, `third_party/kerberos`
-- `third_party/llvm-build` (the clang toolchain)
-- `buildtools/linux64` (the `gn` and `ninja` prebuilts)
-- `third_party/rust-toolchain`
-- `.gni` files for `ffmpeg`, `webrtc`, `pdfium`, `nasm`, `dawn`, and others
-
-`scripts/check_engine_deps.py` lists all of them in one pass:
+A content + blink + v8 build takes hours and needs ~16 cores, 32 GB of RAM and
+100 GB of disk. Developers and applications must never do it. Instead the
+engine is built **once**, in CI, and published as a prebuilt artifact that
+everyone links in seconds.
 
 ```
-python3 scripts/check_engine_deps.py /path/to/chromium
+  .github/workflows/build_engine.yml      build once (big runner)
+                │
+                ▼
+  webgtk-engine-linux-x64.tar.gz          published artifact
+                │
+   scripts/download_engine_prebuilt.sh    fetch + extract
+                │
+                ▼
+  cmake -DWEBGTK_USE_PREBUILT_ENGINE=ON   link in seconds
 ```
 
-## Preparing the tree
-
-`scripts/setup_engine.sh` performs the steps that do work and then runs
-`gn gen`:
+## Using the prebuilt engine
 
 ```sh
-scripts/setup_engine.sh --dir /path/to/engine
-```
-
-It downloads the archive, restores `third_party/perfetto` at the revision
-`chromium/DEPS` pins, installs `gn` via CIPD, writes
-`build/config/gclient_args.gni` (which `gclient runhooks` would normally
-produce), and runs:
-
-```
-gn gen out/webgtk --root-target=//content --args="...diet flags..."
-```
-
-`gn gen` stops on the first missing import, so it does not finish until the
-missing inputs above are restored. The script reports the gap and points at
-`check_engine_deps.py`.
-
-## Building WebGTK against the engine
-
-Once the tree generates ninja files and the engine is built:
-
-```sh
-ninja -C /path/to/engine/chromium/out/webgtk content
-cmake -S . -B build -DWEBGTK_ENGINE_DIR=/path/to/engine
+scripts/download_engine_prebuilt.sh
+cmake -S . -B build -DWEBGTK_USE_PREBUILT_ENGINE=ON
 cmake --build build
 ```
 
-`WEBGTK_ENGINE_DIR` adds `src/backend_chromium.cc` to the build, defines
-`WEBGTK_HAVE_ENGINE`, and adds the engine root plus
-`out/webgtk/gen` to the include path (a Chromium embedder compiles against the
-checkout, not a staged SDK).
+CMake resolves the engine in this order:
 
-## Status of `src/backend_chromium.cc`
+1. `-DWEBGTK_ENGINE_DIR=<tree>` — compile against a Chromium source tree.
+2. `-DWEBGTK_USE_PREBUILT_ENGINE=ON` — link `engine/prebuilt/`.
+3. `engine/prebuilt/manifest.env` exists — use it automatically.
+4. none — mock backend only.
 
-The backend is written against the APIs in the archive and is **not yet
-compile-verified**. With `WEBGTK_ENGINE_DIR` pointed at the extracted tree the
-compiler resolves real Chromium headers and stops at the first *generated*
-header:
+`download_engine_prebuilt.sh` defaults to the newest GitHub Release asset.
+Pass `--url` to fetch from Hugging Face instead, and `--sha256` to verify it:
+
+```sh
+scripts/download_engine_prebuilt.sh \
+  --url https://huggingface.co/datasets/M5-Dev/webgtk-chromium-diet/resolve/main/webgtk-engine-linux-x64.tar.gz \
+  --sha256 <hex>
+```
+
+## What the artifact contains
 
 ```
-base/debug/debugging_buildflags.h: No such file or directory
+lib/libwebgtk_engine.so   the engine, link this
+lib/*.so                  its component-library dependency closure
+include/                  staged headers
+gen/                      generated headers
+manifest.env              revision, flags, checksum
+webgtk-engine.pc          pkg-config file
 ```
 
-That file is produced by the engine build, so this is the expected boundary
-until `gn gen` succeeds. Every API the backend calls was read out of the tree,
-so the calls match the source revision; the first compile against a complete
-checkout is still the real review.
+The engine is built with `is_component_build=true`, so Chromium is a set of
+shared libraries. `libwebgtk_engine.so` links them, and the packaging step
+walks `ldd` to copy the whole closure into `lib/`, which is what makes the
+artifact relocatable. Building one giant static archive was rejected: it needs
+whole-archive linking that collides with Chromium's own shared-library layout.
+
+CMake links **every** library in `lib/`, not just `libwebgtk_engine.so`. A
+library that only lists the others as dependencies does not resolve their
+symbols for its consumers: the backend compiles into `libwebgtk.so`, so its
+references to Chromium symbols have to be resolved at that link step, and an
+umbrella that pulls the components in as `DT_NEEDED` entries is not enough.
+
+## Building the artifact
+
+`.github/workflows/build_engine.yml` builds and publishes it. Trigger it from
+the Actions tab, or push an `engine-v*` tag. It:
+
+1. installs the system dependencies and frees disk space,
+2. caches the source archive and the clang/rust toolchains,
+3. runs `scripts/build_engine_artifact.sh`,
+4. extracts the artifact into `engine/prebuilt/` and builds WebGTK against it,
+5. runs the test suite against the prebuilt engine,
+6. uploads the artifact, and optionally publishes it to a GitHub Release or to
+   Hugging Face.
+
+The same script runs locally on a big machine:
+
+```sh
+scripts/build_engine_artifact.sh --dir ./engine --jobs "$(nproc)"
+```
+
+### The source archive
+
+`https://huggingface.co/datasets/M5-Dev/webgtk-chromium-diet/resolve/main/webgtk_core_v2.tar.gz`
+(685 MB) is a **pruned Chromium source tree**, not a prebuilt engine. Extracted
+it is 2.7 GB / ~200k files with no build outputs, and it is missing inputs that
+`gn gen` needs. `scripts/build_engine_artifact.sh` restores them:
+
+| missing input | restored by |
+| --- | --- |
+| `third_party/perfetto` | `git clone` at the `DEPS` revision |
+| `third_party/webrtc` | shallow `git fetch` at the `DEPS` revision |
+| clang toolchain | `tools/clang/scripts/update.py` |
+| Rust toolchain | `tools/rust/update_rust.py` |
+| `testing/` and `//testing/libfuzzer` | no-op GN template stubs |
+| `build/config/gclient_args.gni` | written by the script |
+| `gn` | CIPD |
+
+The `//testing` stubs matter: the real `testing/libfuzzer/fuzzer_test.gni`
+imports `//build/config/sanitizers/sanitizers.gni`, and `media/media_options.gni`
+depends on that transitive import for `is_asan`. The stub re-exports the import
+so downstream GN files still resolve it.
+
+`third_party` is only *partially* pruned: the directories are present but
+generated files inside them (for example `third_party/ffmpeg/ffmpeg_options.gni`)
+are gone. `scripts/check_engine_deps.py <tree>` lists every GN file the tree
+references but does not contain, which is the fastest way to see the remaining
+gap.
+
+### Build arguments
+
+`scripts/build_engine_artifact.sh` sets these:
+
+- `is_official_build=true`, `is_debug=false`, `symbol_level=0` — release.
+- `is_component_build=true` — shared libraries, see above.
+- `enable_rust=true` — `//base` has Rust sources; the toolchain is restored.
+- `use_kerberos=false` — no vendored `third_party/kerberos`.
+- `use_sysroot=false` — build against the host sysroot.
+- `is_cfi=false` — CFI asserts it needs ThinLTO, which is off.
+- `chrome_pgo_phase=0` — no PGO profiles in a pruned tree.
+
+GN silently ignores arguments that are not declared, so this list stays valid
+across tree revisions.
+
+## Status
+
+The mock build is complete and green: 4/4 tests pass under `xvfb-run`, zero
+warnings.
+
+The prebuilt path is verified end to end with a stub artifact: the downloader
+checksums and extracts, CMake finds `engine/prebuilt/`, compiles
+`backend_chromium.cc` with the staged include paths, links `libwebgtk_engine.so`
+with a working `RUNPATH`, and the closure collector copies a self-resolving set
+of shared libraries.
+
+What is **not** verified is a real engine: the artifact has never been produced
+from a full build. `src/backend_chromium.cc` is written against the APIs in the
+tree but has not been compiled against real Chromium headers. The first
+successful `build_engine.yml` run is what closes that gap.
 
 ### What the backend does
 
 - **Startup**: runs `content::ContentMain` on a dedicated engine thread with a
-  `HeadlessContentMainDelegate` wrapping a `HeadlessBrowserImpl`. The browser's
-  start callback creates a browser context and a `HeadlessWebContents` sized to
-  the requested view.
+  `HeadlessContentMainDelegate` wrapping a `HeadlessBrowserImpl`. The start
+  callback creates a browser context and a `HeadlessWebContents` sized to the
+  view.
 - **Threading**: every vtable call arrives on the GTK main thread and is posted
-  to the engine thread's `SingleThreadTaskRunner`. `render()` is synchronous:
-  it posts a `CopyFromSurface` request and waits on a condition variable.
+  to the engine thread's `SingleThreadTaskRunner`. `render()` is synchronous: it
+  posts a `CopyFromSurface` request and waits on a condition variable.
 - **Frames**: `CopyFromSurface` returns a premultiplied `SkBitmap`; the callback
   converts it to straight RGBA8, which is what `webgtk::Bitmap` promises.
-- **Navigation**: `load_uri` loads a URL; `load_html` loads a `data:` URL, so it
-  needs no temp file.
-- **Script**: `evaluate_javascript` runs on the primary main frame and serialises
-  the result with `base::WriteJson`.
+- **Navigation**: `load_uri` loads a URL; `load_html` loads a `data:` URL.
+- **Script**: `evaluate_javascript` runs on the primary main frame and
+  serialises the result with `base::WriteJson`.
 - **Input**: mouse, wheel and keyboard events go through
   `RenderWidgetHost::ForwardMouseEvent` / `ForwardWheelEvent` /
   `ForwardKeyboardEvent` with Blink event types.
 
 ### Remaining work
 
-1. Restore the missing inputs so `gn gen` completes.
-2. Build `//content` and the engine, then build WebGTK against it.
-3. Compile `src/backend_chromium.cc` and fix whatever the compiler reports.
-4. Package the engine as `libwebgtk_engine.a` (or a set of archives) and a
-   staged `include/` tree so consumers do not need the whole checkout.
-5. Run the GTK3/GTK4 test suite against the Chromium backend under `xvfb-run`.
+1. Run `build_engine.yml` on a runner with enough capacity and fix whatever the
+   real build reports — the engine target names and `backend_chromium.cc` are
+   the likely first failures.
+2. Fix any `third_party` gaps the build surfaces, using
+   `check_engine_deps.py`.
+3. Publish the artifact, then drop the `--url` override from the docs.

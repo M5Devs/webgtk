@@ -15,7 +15,8 @@ src/backend_mock.cc       Deterministic software backend, no engine required
 src/backend_chromium.cc   Real Blink/V8 backend (built when an engine is set)
 examples/webgtk_demo.cc   Embedder demo, built for GTK3 and GTK4
 tests/test_webgtk.c       C ABI and behaviour tests
-scripts/                  Engine fetch/prepare and dependency checker
+scripts/                  Engine download/build tooling
+.github/workflows/        Engine build and publish pipeline
 docs/ENGINE.md            Engine integration notes and current status
 ```
 
@@ -41,17 +42,22 @@ LeakSanitizer would otherwise report.
 ## Linking the engine
 
 The Blink/V8 engine is optional. Without it everything builds and tests against
-the mock backend. To build the real backend, point the build at an engine tree:
+the mock backend. To build the real backend, download the prebuilt engine and
+point CMake at it:
 
 ```sh
-cmake -S . -B build -DWEBGTK_ENGINE_DIR=/path/to/engine
+scripts/download_engine_prebuilt.sh
+cmake -S . -B build -DWEBGTK_USE_PREBUILT_ENGINE=ON
+cmake --build build
 ```
 
-That adds `src/backend_chromium.cc`, defines `WEBGTK_HAVE_ENGINE`, and adds the
-engine root and `out/webgtk/gen` to the include path. `scripts/setup_engine.sh`
-downloads and prepares the engine; `scripts/check_engine_deps.py` reports which
-inputs a pruned checkout is still missing. See `docs/ENGINE.md` for the current
-state of the integration.
+That adds `src/backend_chromium.cc`, defines `WEBGTK_HAVE_ENGINE`, and links
+`libwebgtk_engine.so` from `engine/prebuilt/`. It takes seconds: the engine is
+compiled once in CI (`.github/workflows/build_engine.yml`), never on your
+machine.
+
+`-DWEBGTK_ENGINE_DIR=<tree>` instead compiles against a Chromium source tree,
+which is only useful when working on the engine itself. See `docs/ENGINE.md`.
 
 ## Using a view
 

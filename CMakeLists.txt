@@ -30,7 +30,33 @@ option(WEBGTK_BUILD_TESTS "Build the WebGTK test suite" ON)
 option(WEBGTK_BUILD_DEMOS "Build the GTK3/GTK4 demos" ON)
 option(WEBGTK_ENABLE_SANITIZERS "Enable ASan/UBSan in Debug builds" ON)
 set(WEBGTK_ENGINE_DIR "" CACHE PATH
-    "Directory containing the pruned Blink/V8 engine (include/ and lib/)")
+    "Chromium source tree to compile the engine backend against")
+option(WEBGTK_USE_PREBUILT_ENGINE
+       "Link the prebuilt engine in engine/prebuilt (see scripts/download_engine_prebuilt.sh)"
+       OFF)
+
+# Engine resolution, in priority order:
+#   1. WEBGTK_ENGINE_DIR      - compile against a Chromium source tree
+#   2. WEBGTK_USE_PREBUILT_ENGINE=ON - link engine/prebuilt
+#   3. engine/prebuilt exists  - use it automatically
+#   4. none                    - mock backend only
+set(WEBGTK_ENGINE_PREBUILT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/engine/prebuilt")
+
+if(WEBGTK_ENGINE_DIR)
+  set(WEBGTK_ENGINE_MODE "source")
+elseif(WEBGTK_USE_PREBUILT_ENGINE)
+  set(WEBGTK_ENGINE_MODE "prebuilt")
+elseif(EXISTS "${WEBGTK_ENGINE_PREBUILT_DIR}/manifest.env")
+  set(WEBGTK_ENGINE_MODE "prebuilt")
+else()
+  set(WEBGTK_ENGINE_MODE "mock")
+endif()
+
+if(NOT WEBGTK_ENGINE_MODE STREQUAL "mock")
+  set(WEBGTK_HAVE_ENGINE 1)
+else()
+  set(WEBGTK_HAVE_ENGINE 0)
+endif()
 
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(GTK3 REQUIRED IMPORTED_TARGET gtk+-3.0)
@@ -48,9 +74,47 @@ if(WEBGTK_ENABLE_SANITIZERS AND CMAKE_BUILD_TYPE STREQUAL "Debug"
 endif()
 
 set(WEBGTK_SOURCES src/backend_mock.cc src/webgtk_view.cc)
-if(WEBGTK_ENGINE_DIR)
+if(WEBGTK_HAVE_ENGINE)
   list(APPEND WEBGTK_SOURCES src/backend_chromium.cc)
 endif()
+
+# Compilation happens in the OBJECT library, so the engine headers go there.
+# A source-tree build compiles against the checkout; a prebuilt build compiles
+# against the staged headers and generated headers in the artifact.
+function(webgtk_engine_include_dirs target)
+  if(WEBGTK_ENGINE_MODE STREQUAL "prebuilt")
+    target_include_directories(${target} PRIVATE
+      ${WEBGTK_ENGINE_PREBUILT_DIR}/include
+      ${WEBGTK_ENGINE_PREBUILT_DIR}/gen)
+  elseif(WEBGTK_ENGINE_MODE STREQUAL "source")
+    target_include_directories(${target} PRIVATE
+      ${WEBGTK_ENGINE_DIR}/chromium
+      ${WEBGTK_ENGINE_DIR}/chromium/out/webgtk/gen)
+  endif()
+endfunction()
+
+function(webgtk_link_engine target)
+  if(WEBGTK_ENGINE_MODE STREQUAL "prebuilt")
+    # The backend is compiled into this library, so its references to Chromium
+    # symbols must be resolved here. Chromium is built as components, so link
+    # every library in the artifact: an umbrella that only depends on them does
+    # not resolve the symbols for its consumers.
+    file(GLOB WEBGTK_ENGINE_LIBS "${WEBGTK_ENGINE_PREBUILT_DIR}/lib/*.so")
+    if(NOT WEBGTK_ENGINE_LIBS)
+      message(FATAL_ERROR
+        "No shared libraries in ${WEBGTK_ENGINE_PREBUILT_DIR}/lib. "
+        "Run scripts/download_engine_prebuilt.sh first.")
+    endif()
+    target_link_libraries(${target} PRIVATE ${WEBGTK_ENGINE_LIBS})
+    # Keep a runpath so the demos and tests find the engine libraries in place.
+    set_target_properties(${target} PROPERTIES
+      BUILD_RPATH "${WEBGTK_ENGINE_PREBUILT_DIR}/lib"
+      INSTALL_RPATH "${WEBGTK_ENGINE_PREBUILT_DIR}/lib")
+  elseif(WEBGTK_ENGINE_MODE STREQUAL "source")
+    target_link_directories(${target} PRIVATE ${WEBGTK_ENGINE_DIR}/lib)
+    target_link_libraries(${target} PRIVATE webgtk_engine)
+  endif()
+endfunction()
 
 # One object library per GTK major version: webgtk_view.cc is compiled twice
 # with different WEBGTK_GTK4 settings, so the two shared libraries can never
@@ -61,13 +125,9 @@ function(webgtk_add_objects target gtk_target)
     PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
   target_link_libraries(${target} PUBLIC ${gtk_target} epoxy)
-  if(WEBGTK_ENGINE_DIR)
+  if(WEBGTK_HAVE_ENGINE)
     target_compile_definitions(${target} PUBLIC WEBGTK_HAVE_ENGINE=1)
-    # A Chromium embedder compiles against the checkout, not a staged SDK:
-    # out/<name>/gen holds generated headers, the root holds the rest.
-    target_include_directories(${target} PRIVATE
-      ${WEBGTK_ENGINE_DIR}/chromium
-      ${WEBGTK_ENGINE_DIR}/chromium/out/webgtk/gen)
+    webgtk_engine_include_dirs(${target})
   endif()
 endfunction()
 
@@ -75,9 +135,8 @@ function(webgtk_add_shared target objects)
   add_library(${target} SHARED)
   # PUBLIC so consumers inherit the include dirs and GTK dependency.
   target_link_libraries(${target} PUBLIC ${objects})
-  if(WEBGTK_ENGINE_DIR)
-    target_link_directories(${target} PRIVATE ${WEBGTK_ENGINE_DIR}/lib)
-    target_link_libraries(${target} PRIVATE webgtk_engine)
+  if(WEBGTK_HAVE_ENGINE)
+    webgtk_link_engine(${target})
   endif()
 endfunction()
 
@@ -88,10 +147,13 @@ target_compile_definitions(webgtk_gtk4_objs PRIVATE WEBGTK_GTK4=1)
 webgtk_add_shared(webgtk webgtk_gtk3_objs)
 webgtk_add_shared(webgtk4 webgtk_gtk4_objs)
 
-if(WEBGTK_ENGINE_DIR)
-  message(STATUS "WebGTK: linking engine from ${WEBGTK_ENGINE_DIR}")
+if(WEBGTK_ENGINE_MODE STREQUAL "prebuilt")
+  message(STATUS "WebGTK: linking prebuilt engine from ${WEBGTK_ENGINE_PREBUILT_DIR}")
+elseif(WEBGTK_ENGINE_MODE STREQUAL "source")
+  message(STATUS "WebGTK: compiling against engine source ${WEBGTK_ENGINE_DIR}")
 else()
-  message(STATUS "WebGTK: no engine configured, mock backend only")
+  message(STATUS "WebGTK: no engine configured, mock backend only "
+                 "(run scripts/download_engine_prebuilt.sh to enable it)")
 endif()
 
 # ---- Demos ---------------------------------------------------------------

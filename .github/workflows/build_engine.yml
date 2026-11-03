@@ -1,0 +1,165 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+#
+# Build the WebGTK Chromium engine once and publish it as a prebuilt artifact.
+#
+# This is the only place the engine is compiled. Everyone else downloads the
+# artifact and links it in seconds. See docs/ENGINE.md.
+#
+# Runners: a content + blink + v8 build wants ~16 cores, 32 GB RAM and 100 GB of
+# free disk. GitHub-hosted `ubuntu-22.04` has 4 cores / 16 GB / 14 GB disk and
+# will not finish. Point `runner` at a self-hosted or larger runner, or set the
+# `ENGINE_RUNNER` repository variable to use one by default.
+
+name: build-engine
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner:
+        description: "Runner label (needs ~16 cores, 32 GB RAM, 100 GB disk)"
+        type: string
+        default: ""
+      publish:
+        description: "Where to publish the artifact"
+        type: choice
+        options:
+          - none
+          - github-release
+          - huggingface
+          - both
+        default: none
+      hf_dataset:
+        description: "Hugging Face dataset to publish to"
+        type: string
+        default: "M5-Dev/webgtk-chromium-diet"
+  push:
+    tags:
+      - "engine-v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-engine-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  ARTIFACT: webgtk-engine-linux-x64.tar.gz
+
+jobs:
+  build:
+    name: Build and publish the engine
+    runs-on: ${{ inputs.runner || vars.ENGINE_RUNNER || 'ubuntu-22.04' }}
+    timeout-minutes: 720
+
+    permissions:
+      contents: write   # create a GitHub Release when publishing
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Report runner capacity
+        run: |
+          echo "cores:  $(nproc)"
+          echo "memory: $(free -h | awk '/^Mem:/{print $2}')"
+          echo "disk:   $(df -h . | awk 'NR==2{print $4}')"
+
+      - name: Free disk space
+        # GitHub-hosted images carry SDKs this build never touches.
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" 2>/dev/null || true
+          sudo apt-get clean
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential git python3 curl wget ca-certificates xz-utils \
+            pkg-config xvfb \
+            libgtk-3-dev libgtk-4-dev libatk-bridge2.0-dev \
+            libnss3-dev libnspr4-dev libxss-dev libasound2-dev libcups2-dev \
+            libdrm-dev libgbm-dev libxkbcommon-dev libxcomposite-dev \
+            libxdamage-dev libxrandr-dev libxtst-dev libpango1.0-dev \
+            libcairo2-dev libepoxy-dev
+
+      # The source archive and the clang/rust toolchains dominate download time.
+      - name: Cache engine downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            engine/webgtk_core_v2.tar.gz
+            engine/gnroot
+            engine/cipd
+            engine/chromium/third_party/llvm-build
+            engine/chromium/third_party/rust-toolchain
+            engine/chromium/third_party/perfetto
+            engine/chromium/third_party/webrtc
+          key: engine-deps-${{ hashFiles('scripts/build_engine_artifact.sh') }}
+
+      - name: Build and package the engine
+        run: |
+          scripts/build_engine_artifact.sh \
+            --dir "$GITHUB_WORKSPACE/engine" \
+            --out "$GITHUB_WORKSPACE/$ARTIFACT" \
+            --jobs "$(nproc)"
+
+      - name: Inspect the artifact
+        run: |
+          set -euo pipefail
+          test -f "$ARTIFACT"
+          tar -tzf "$ARTIFACT" | grep -qx './lib/libwebgtk_engine.so'
+          tar -tzf "$ARTIFACT" | grep -qx './manifest.env'
+          echo "shared libraries: $(tar -tzf "$ARTIFACT" | grep -c '\.so$')"
+          echo "size:   $(du -h "$ARTIFACT" | cut -f1)"
+          echo "sha256: $(sha256sum "$ARTIFACT" | cut -d' ' -f1)"
+
+      # The real acceptance test: link the artifact and run the suite.
+      - name: Link WebGTK against the artifact
+        run: |
+          set -euo pipefail
+          rm -rf engine/prebuilt
+          mkdir -p engine/prebuilt
+          tar -xzf "$ARTIFACT" -C engine/prebuilt
+          cmake -S . -B build-prebuilt \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DWEBGTK_USE_PREBUILT_ENGINE=ON
+          cmake --build build-prebuilt -j"$(nproc)"
+          ldd build-prebuilt/libwebgtk.so | grep -q libwebgtk_engine
+
+      - name: Run the test suite against the prebuilt engine
+        run: xvfb-run -a ctest --test-dir build-prebuilt --output-on-failure
+
+      - name: Upload the artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: webgtk-engine-linux-x64
+          path: ${{ env.ARTIFACT }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish to a GitHub Release
+        if: inputs.publish == 'github-release' || inputs.publish == 'both' || startsWith(github.ref, 'refs/tags/engine-v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.ARTIFACT }}
+          generate_release_notes: true
+
+      - name: Publish to Hugging Face
+        if: inputs.publish == 'huggingface' || inputs.publish == 'both'
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${HF_TOKEN:-}" ]; then
+            echo "::error::secret HF_TOKEN is not set; cannot publish to Hugging Face"
+            exit 1
+          fi
+          dataset="${{ inputs.hf_dataset }}"
+          curl --fail --silent --show-error \
+            -X POST \
+            -H "Authorization: Bearer $HF_TOKEN" \
+            -F "file=@$ARTIFACT" \
+            "https://huggingface.co/api/datasets/$dataset/upload/main/$ARTIFACT"
+          echo "published $ARTIFACT to $dataset"
