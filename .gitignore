@@ -1,0 +1,21 @@
+# Build output
+build/
+build-*/
+out/
+cmake-build-*/
+
+# Vendored engine and downloaded archives
+chromium/
+engine/
+*.tar.gz
+*.tar.xz
+*.zip
+
+# Agent workspace state
+.openhands/
+
+# Editor and OS noise
+.vscode/
+.idea/
+*.swp
+.DS_Store

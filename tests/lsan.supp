@@ -1,0 +1,22 @@
+# LeakSanitizer suppressions for the GUI test suite.
+#
+# A GtkGLArea pulls in the system GL stack, whose drivers keep process-lifetime
+# allocations that LSan reports as leaks. These are third-party one-time
+# allocations, not WebGTK leaks, so they are suppressed by library.
+leak:libGLX_mesa
+leak:libGLX
+leak:libEGL
+leak:libgallium
+leak:swrast
+leak:libdbus-1
+leak:libgio-2.0
+leak:libgdk-3
+leak:libgtk-3
+leak:libgdk-4
+leak:libgtk-4
+leak:libfontconfig
+leak:libharfbuzz
+leak:libpango
+leak:libcairo
+leak:libgraphene
+leak:libffi
