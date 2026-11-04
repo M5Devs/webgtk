@@ -92,6 +92,17 @@ using blink::WebInputEvent;
 using blink::WebMouseEvent;
 using blink::WebMouseWheelEvent;
 
+// Translates the WebGTK modifier bitmask into Blink's. The two happen to line
+// up today, but mapping explicitly keeps the ABI free to diverge.
+int blink_modifiers(unsigned mods) {
+  int out = 0;
+  if (mods & WEBGTK_MOD_SHIFT) out |= WebInputEvent::kShiftKey;
+  if (mods & WEBGTK_MOD_CONTROL) out |= WebInputEvent::kControlKey;
+  if (mods & WEBGTK_MOD_ALT) out |= WebInputEvent::kAltKey;
+  if (mods & WEBGTK_MOD_SUPER) out |= WebInputEvent::kMetaKey;
+  return out;
+}
+
 // How long render() waits for a compositor frame before giving up.
 constexpr base::TimeDelta kCopyTimeout = base::Seconds(2);
 // Upper bound on the synchronous wait for the copy callback.
@@ -593,6 +604,96 @@ webgtk_status chromium_text_input(void *self, const char *utf8) {
   return WEBGTK_OK;
 }
 
+webgtk_status chromium_send_mouse_event(void *self,
+                                        const webgtk_mouse_event *event) {
+  auto *backend = static_cast<ChromiumBackend *>(self);
+  if (!backend || !event) return WEBGTK_ERROR_INVALID_ARGUMENT;
+  backend->PostToEngine(base::BindOnce(
+      [](ChromiumBackend *b, webgtk_mouse_event ev) {
+        if (!b->web_contents) return;
+        content::WebContents *contents = ToWebContents(b->web_contents);
+        if (!contents) return;
+        content::RenderWidgetHost *host =
+            contents->GetPrimaryMainFrame()->GetRenderWidgetHost();
+        if (!host) return;
+        WebInputEvent::Type type = WebInputEvent::Type::kMouseMove;
+        WebMouseEvent::Button blink_button = WebMouseEvent::Button::kNoButton;
+        if (ev.type != WEBGTK_MOUSE_MOVE) {
+          type = ev.type == WEBGTK_MOUSE_PRESS ? WebInputEvent::Type::kMouseDown
+                                               : WebInputEvent::Type::kMouseUp;
+          switch (ev.button) {
+            case WEBGTK_MOUSE_LEFT:
+              blink_button = WebMouseEvent::Button::kLeft;
+              break;
+            case WEBGTK_MOUSE_MIDDLE:
+              blink_button = WebMouseEvent::Button::kMiddle;
+              break;
+            case WEBGTK_MOUSE_RIGHT:
+              blink_button = WebMouseEvent::Button::kRight;
+              break;
+          }
+        }
+        const gfx::PointF point(static_cast<float>(ev.x),
+                                static_cast<float>(ev.y));
+        WebMouseEvent blink_event(type, point, point, blink_button,
+                                  ev.click_count, blink_modifiers(ev.modifiers),
+                                  base::TimeTicks::Now());
+        host->ForwardMouseEvent(blink_event);
+      },
+      backend, *event));
+  return WEBGTK_OK;
+}
+
+webgtk_status chromium_send_key_event(void *self,
+                                      const webgtk_key_event *event) {
+  auto *backend = static_cast<ChromiumBackend *>(self);
+  if (!backend || !event) return WEBGTK_ERROR_INVALID_ARGUMENT;
+  backend->PostToEngine(base::BindOnce(
+      [](ChromiumBackend *b, webgtk_key_event ev) {
+        if (!b->web_contents) return;
+        content::WebContents *contents = ToWebContents(b->web_contents);
+        if (!contents) return;
+        content::RenderWidgetHost *host =
+            contents->GetPrimaryMainFrame()->GetRenderWidgetHost();
+        if (!host) return;
+        input::NativeWebKeyboardEvent blink_event(
+            ev.type == WEBGTK_KEY_PRESS ? WebInputEvent::Type::kRawKeyDown
+                                        : WebInputEvent::Type::kKeyUp,
+            blink_modifiers(ev.modifiers), base::TimeTicks::Now());
+        blink_event.windows_key_code = static_cast<int>(ev.keyval);
+        blink_event.native_key_code = static_cast<int>(ev.keycode);
+        if (ev.text && ev.text[0]) {
+          const std::u16string utf16 = base::UTF8ToUTF16(ev.text);
+          const size_t count = std::min<size_t>(utf16.size(), 4);
+          for (size_t i = 0; i < count; ++i) blink_event.text[i] = utf16[i];
+          blink_event.text[count] = 0;
+        }
+        host->ForwardKeyboardEvent(blink_event);
+      },
+      backend, *event));
+  return WEBGTK_OK;
+}
+
+webgtk_status chromium_send_focus_event(void *self, int focused) {
+  auto *backend = static_cast<ChromiumBackend *>(self);
+  if (!backend) return WEBGTK_ERROR_INVALID_ARGUMENT;
+  backend->PostToEngine(base::BindOnce(
+      [](ChromiumBackend *b, bool has_focus) {
+        if (!b->web_contents) return;
+        content::WebContents *contents = ToWebContents(b->web_contents);
+        if (!contents) return;
+        content::RenderWidgetHost *host =
+            contents->GetPrimaryMainFrame()->GetRenderWidgetHost();
+        if (!host) return;
+        if (has_focus)
+          host->Focus();
+        else
+          host->Blur();
+      },
+      backend, focused != 0));
+  return WEBGTK_OK;
+}
+
 webgtk_status chromium_add_script_message_handler(void *self,
                                                   const char *name) {
   auto *backend = static_cast<ChromiumBackend *>(self);
@@ -633,6 +734,9 @@ const BackendOps kChromiumOps = {
     &chromium_mouse_scroll,
     &chromium_key_event,
     &chromium_text_input,
+    &chromium_send_mouse_event,
+    &chromium_send_key_event,
+    &chromium_send_focus_event,
     &chromium_add_script_message_handler,
     &chromium_remove_script_message_handler,
     &chromium_set_host_view,

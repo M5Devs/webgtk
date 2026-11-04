@@ -101,6 +101,13 @@ def selftest(WebGTK, Gtk, gtk_version):
 
     check(int(WebGTK.MouseButton.RIGHT) == 2, "mouse-button enum is bound")
 
+    # The widget must be focusable, or key events would never reach the view.
+    widget = view.get_property("widget")
+    if gtk_version == "4.0":
+        check(widget.get_focusable(), "widget is focusable")
+    else:
+        check(widget.get_can_focus(), "widget can take focus")
+
     # The IPC bridge: a page post reaches Python with no polling loop. The mock
     # replays window.webgtk.postMessage() natively, so this runs headless.
     messages = []

@@ -137,6 +137,145 @@ static int count_non_uniform(const unsigned char *pixels, size_t size) {
   return distinct;
 }
 
+/* --- input forwarding ---------------------------------------------------- */
+
+/* Colours the mock renderer uses for its input markers. */
+static int is_cursor(const unsigned char *p) {
+  return p[0] == 240 && p[1] == 180 && p[2] == 60;
+}
+static int is_marker_on(const unsigned char *p) {
+  return p[0] == 80 && p[1] == 220 && p[2] == 120;
+}
+
+static const unsigned char *pixel_at(const unsigned char *px, int w, int x,
+                                     int y) {
+  return px + ((size_t)y * w + x) * 4;
+}
+
+/* The mock draws a crosshair centred on the last forwarded pointer position.
+ * The row with the most cursor-coloured pixels is the horizontal arm; its
+ * midpoint is the forwarded x, and that row index is the forwarded y. */
+static int locate_crosshair(const unsigned char *px, int w, int h, int *cx,
+                            int *cy) {
+  int best_row = -1, best_count = 0, best_min = 0, best_max = 0;
+  for (int y = 0; y < h; ++y) {
+    int count = 0, min_x = w, max_x = -1;
+    for (int x = 0; x < w; ++x) {
+      if (!is_cursor(pixel_at(px, w, x, y))) continue;
+      ++count;
+      if (x < min_x) min_x = x;
+      if (x > max_x) max_x = x;
+    }
+    if (count > best_count) {
+      best_count = count;
+      best_row = y;
+      best_min = min_x;
+      best_max = max_x;
+    }
+  }
+  if (best_row < 0) return 0;
+  *cx = (best_min + best_max) / 2;
+  *cy = best_row;
+  return 1;
+}
+
+/* The last key code is drawn as 8 cells at the bottom-right, LSB first. */
+static unsigned decode_key_bits(const unsigned char *px, int w, int h) {
+  unsigned value = 0;
+  for (int bit = 0; bit < 8; ++bit) {
+    const int x = w - 16 - bit * 10 + 4;
+    const int y = h - 16 + 4;
+    if (is_marker_on(pixel_at(px, w, x, y))) value |= (1u << bit);
+  }
+  return value;
+}
+
+static void test_input_forwarding(void) {
+  const int width = 200;
+  const int height = 150;
+  const size_t bytes = (size_t)width * height * 4;
+  unsigned char *pixels = (unsigned char *)malloc(bytes);
+  CHECK(pixels != NULL, "input test buffer allocated");
+
+  webgtk_view *view = webgtk_view_new(width, height);
+  CHECK(view != NULL, "view created for input test");
+  webgtk_view_load_html(view, "<h1>input</h1>", 13);
+
+  int cx = -1, cy = -1;
+
+  /* A rich mouse move must land the crosshair exactly where it was sent. */
+  webgtk_mouse_event move = {0};
+  move.type = WEBGTK_MOUSE_MOVE;
+  move.x = 60;
+  move.y = 40;
+  move.modifiers = WEBGTK_MOD_SHIFT;
+  CHECK(webgtk_view_send_mouse_event(view, &move) == WEBGTK_OK,
+        "send_mouse_event accepts a move");
+  CHECK(webgtk_view_render(view, pixels, bytes) == WEBGTK_OK, "render after move");
+  CHECK(locate_crosshair(pixels, width, height, &cx, &cy),
+        "crosshair found after move");
+  CHECK(cx == 60 && cy == 40, "move forwarded the exact coordinates");
+
+  /* A press records the button, sets the pressed marker and bumps the count. */
+  webgtk_mouse_event press = {0};
+  press.type = WEBGTK_MOUSE_PRESS;
+  press.x = 80;
+  press.y = 50;
+  press.button = WEBGTK_MOUSE_RIGHT;
+  press.click_count = 2;
+  CHECK(webgtk_view_send_mouse_event(view, &press) == WEBGTK_OK,
+        "send_mouse_event accepts a press");
+  CHECK(webgtk_view_render(view, pixels, bytes) == WEBGTK_OK, "render after press");
+  CHECK(locate_crosshair(pixels, width, height, &cx, &cy),
+        "crosshair found after press");
+  CHECK(cx == 80 && cy == 50, "press forwarded the exact coordinates");
+  CHECK(!is_cursor(pixel_at(pixels, width, 80, 50)),
+        "pressed button marker is no longer cursor-coloured");
+
+  /* A scroll is counted and its deltas retained. */
+  webgtk_scroll_event scroll = {0};
+  scroll.dx = 0.0;
+  scroll.dy = -2.0;
+  scroll.modifiers = WEBGTK_MOD_CONTROL;
+  CHECK(webgtk_view_send_scroll_event(view, &scroll) == WEBGTK_OK,
+        "send_scroll_event accepted");
+
+  /* A key press must carry the keyval through to the rendered bit pattern. */
+  webgtk_key_event key = {0};
+  key.type = WEBGTK_KEY_PRESS;
+  key.keyval = 0x41; /* 'A' */
+  key.keycode = 38;
+  key.text = "A";
+  CHECK(webgtk_view_send_key_event(view, &key) == WEBGTK_OK,
+        "send_key_event accepts a press");
+  CHECK(webgtk_view_render(view, pixels, bytes) == WEBGTK_OK, "render after key");
+  CHECK(decode_key_bits(pixels, width, height) == 0x41,
+        "keyval forwarded to the rendered bit pattern");
+  CHECK(is_marker_on(pixel_at(pixels, width, 12, 12)),
+        "key marker lit after a key press");
+
+  /* Focus toggles the focus marker. */
+  CHECK(webgtk_view_send_focus_event(view, 1) == WEBGTK_OK, "focus in accepted");
+  CHECK(webgtk_view_render(view, pixels, bytes) == WEBGTK_OK, "render after focus");
+  CHECK(is_marker_on(pixel_at(pixels, width, 24, 12)), "focus marker lit");
+  CHECK(webgtk_view_send_focus_event(view, 0) == WEBGTK_OK, "focus out accepted");
+  CHECK(webgtk_view_render(view, pixels, bytes) == WEBGTK_OK,
+        "render after blur");
+  CHECK(!is_marker_on(pixel_at(pixels, width, 24, 12)), "focus marker cleared");
+
+  /* NULL arguments are refused rather than dereferenced. */
+  CHECK(webgtk_view_send_mouse_event(view, NULL) == WEBGTK_ERROR_INVALID_ARGUMENT,
+        "NULL mouse event rejected");
+  CHECK(webgtk_view_send_key_event(view, NULL) == WEBGTK_ERROR_INVALID_ARGUMENT,
+        "NULL key event rejected");
+  CHECK(webgtk_view_send_scroll_event(view, NULL) ==
+            WEBGTK_ERROR_INVALID_ARGUMENT,
+        "NULL scroll event rejected");
+
+  free(pixels);
+  webgtk_view_destroy(view);
+}
+
 static void test_creation(void) {
   webgtk_view *view = webgtk_view_new(320, 240);
   CHECK(view != NULL, "webgtk_view_new returns a view");
@@ -230,6 +369,7 @@ int main(int argc, char **argv) {
   test_creation();
   test_loading_and_js();
   test_script_messages();
+  test_input_forwarding();
   test_rendering();
   test_status_strings();
 

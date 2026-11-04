@@ -60,6 +60,16 @@ struct BackendOps {
                              unsigned modifiers);
   webgtk_status (*text_input)(void *self, const char *utf8);
 
+  // Rich input. These carry the full event, so a backend can build a faithful
+  // engine event (click count, hardware keycode, committed text, focus). The
+  // scalar ops above stay for embedders that only have the simple form; a
+  // backend must implement whichever it advertises and leave the rest NULL.
+  webgtk_status (*send_mouse_event)(void *self, const webgtk_mouse_event *event);
+  webgtk_status (*send_key_event)(void *self, const webgtk_key_event *event);
+  webgtk_status (*send_scroll_event)(void *self,
+                                     const webgtk_scroll_event *event);
+  webgtk_status (*send_focus_event)(void *self, int focused);
+
   // Script message handlers. `add` makes the engine route posts addressed to
   // `name` back through the view's dispatch helper; `remove` stops that. Both
   // are optional: a backend that cannot do IPC leaves them NULL and the view

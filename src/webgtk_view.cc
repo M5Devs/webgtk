@@ -38,7 +38,7 @@ bool valid_size(int width, int height) {
          height <= kMaxDimension;
 }
 
-unsigned map_modifiers(GdkModifierType state) {
+unsigned map_modifiers(guint state) {
   unsigned out = 0;
   if (state & GDK_SHIFT_MASK) out |= WEBGTK_MOD_SHIFT;
   if (state & GDK_CONTROL_MASK) out |= WEBGTK_MOD_CONTROL;
@@ -287,6 +287,14 @@ struct webgtk_view {
   bool destroyed;
   int width;
   int height;
+
+  /* Input bookkeeping. GtkEventControllerScroll has no cursor position, so the
+   * last motion point supplies the coordinates for a scroll's hit test. */
+  double pointer_x;
+  double pointer_y;
+  bool pointer_valid;
+  bool key_pressed;
+  bool focused;
 };
 
 namespace {
@@ -447,6 +455,11 @@ static void webgtk_view_init(webgtk_view *view) {
   view->destroyed = false;
   view->width = 0;
   view->height = 0;
+  view->pointer_x = 0.0;
+  view->pointer_y = 0.0;
+  view->pointer_valid = false;
+  view->key_pressed = false;
+  view->focused = false;
 }
 
 static void webgtk_view_dispose(GObject *object) {
@@ -607,61 +620,340 @@ gboolean webgtk_on_render(GtkGLArea *area, GdkGLContext *, gpointer data) {
   return TRUE;
 }
 
-void webgtk_on_motion(GtkEventControllerMotion *, double x, double y,
+#if WEBGTK_GTK4
+/* GTK4 gestures/controllers do not hand over the modifier state, but the
+ * controller can report the state of the event it is currently handling. */
+unsigned current_modifiers(GtkEventController *controller) {
+  return map_modifiers(
+      gtk_event_controller_get_current_event_state(controller));
+}
+#endif
+
+/* Dispatch helpers prefer the rich struct op and fall back to the scalar one,
+ * so a backend only has to implement the shape it can support. */
+webgtk_status dispatch_mouse(webgtk_view *view, const webgtk_mouse_event *event) {
+  if (view->ops->send_mouse_event)
+    return view->ops->send_mouse_event(view->backend, event);
+  if (event->type == WEBGTK_MOUSE_MOVE) {
+    return view->ops->mouse_move
+               ? view->ops->mouse_move(view->backend, static_cast<int>(event->x),
+                                       static_cast<int>(event->y),
+                                       event->modifiers)
+               : WEBGTK_ERROR_NOT_IMPLEMENTED;
+  }
+  return view->ops->mouse_button
+             ? view->ops->mouse_button(
+                   view->backend, static_cast<int>(event->x),
+                   static_cast<int>(event->y), event->button,
+                   event->type == WEBGTK_MOUSE_PRESS, event->modifiers)
+             : WEBGTK_ERROR_NOT_IMPLEMENTED;
+}
+
+webgtk_status dispatch_key(webgtk_view *view, const webgtk_key_event *event) {
+  if (view->ops->send_key_event)
+    return view->ops->send_key_event(view->backend, event);
+  return view->ops->key_event
+             ? view->ops->key_event(view->backend, event->keyval,
+                                    event->type == WEBGTK_KEY_PRESS,
+                                    event->modifiers)
+             : WEBGTK_ERROR_NOT_IMPLEMENTED;
+}
+
+webgtk_status dispatch_scroll(webgtk_view *view,
+                              const webgtk_scroll_event *event) {
+  if (view->ops->send_scroll_event)
+    return view->ops->send_scroll_event(view->backend, event);
+  // The scalar op needs a position; the last motion point is the best estimate
+  // and is what the engine would hit-test against anyway.
+  const int x = view->pointer_valid ? static_cast<int>(view->pointer_x)
+                                    : view->width / 2;
+  const int y = view->pointer_valid ? static_cast<int>(view->pointer_y)
+                                    : view->height / 2;
+  return view->ops->mouse_scroll
+             ? view->ops->mouse_scroll(view->backend, x, y, event->dx, event->dy,
+                                       event->modifiers)
+             : WEBGTK_ERROR_NOT_IMPLEMENTED;
+}
+
+void dispatch_focus(webgtk_view *view, bool focused) {
+  view->focused = focused;
+  if (view->ops->send_focus_event)
+    view->ops->send_focus_event(view->backend, focused ? 1 : 0);
+}
+
+/* Printable text for a key event, or NULL. Control and Alt combinations are
+ * treated as commands (Ctrl+C must not look like the letter "c"), and the
+ * keypad/function keys map to no character at all. */
+const char *key_text(guint keyval, unsigned modifiers) {
+  if (modifiers & (WEBGTK_MOD_CONTROL | WEBGTK_MOD_ALT)) return nullptr;
+  const gunichar ch = gdk_keyval_to_unicode(keyval);
+  if (ch == 0 || !g_unichar_isprint(ch)) return nullptr;
+  static char buffer[8];
+  const int len = g_unichar_to_utf8(ch, buffer);
+  buffer[len] = '\0';
+  return buffer;
+}
+
+#if WEBGTK_GTK4
+/* --- GTK4: event controllers and gestures --- */
+
+void webgtk_on_motion(GtkEventControllerMotion *controller, double x, double y,
                       gpointer data) {
   auto *view = static_cast<webgtk_view *>(data);
   if (view->destroyed) return;
-  view->ops->mouse_move(view->backend, static_cast<int>(x),
-                        static_cast<int>(y), 0);
+  view->pointer_x = x;
+  view->pointer_y = y;
+  view->pointer_valid = true;
+  webgtk_mouse_event event{};
+  event.type = WEBGTK_MOUSE_MOVE;
+  event.x = x;
+  event.y = y;
+  event.modifiers = current_modifiers(GTK_EVENT_CONTROLLER(controller));
+  dispatch_mouse(view, &event);
 }
 
-void webgtk_on_button_pressed(GtkGesture *gesture, int, double x, double y,
-                              gpointer data) {
+void webgtk_on_button_pressed(GtkGesture *gesture, int n_press, double x,
+                              double y, gpointer data) {
   auto *view = static_cast<webgtk_view *>(data);
   if (view->destroyed) return;
+  // A click gives the view keyboard focus, so subsequent key events arrive.
+  GtkWidget *widget =
+      gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(gesture));
+  if (widget) gtk_widget_grab_focus(widget);
+  view->pointer_x = x;
+  view->pointer_y = y;
+  view->pointer_valid = true;
   const guint button =
       gtk_gesture_single_get_current_button(GTK_GESTURE_SINGLE(gesture));
-  view->ops->mouse_button(view->backend, static_cast<int>(x),
-                          static_cast<int>(y), map_button(button), 1, 0);
+  webgtk_mouse_event event{};
+  event.type = WEBGTK_MOUSE_PRESS;
+  event.x = x;
+  event.y = y;
+  event.button = map_button(button);
+  event.modifiers = current_modifiers(GTK_EVENT_CONTROLLER(gesture));
+  event.click_count = n_press > 0 ? n_press : 1;
+  dispatch_mouse(view, &event);
 }
 
-void webgtk_on_button_released(GtkGesture *gesture, int, double x, double y,
-                               gpointer data) {
+void webgtk_on_button_released(GtkGesture *gesture, int n_press, double x,
+                               double y, gpointer data) {
   auto *view = static_cast<webgtk_view *>(data);
   if (view->destroyed) return;
+  view->pointer_x = x;
+  view->pointer_y = y;
+  view->pointer_valid = true;
   const guint button =
       gtk_gesture_single_get_current_button(GTK_GESTURE_SINGLE(gesture));
-  view->ops->mouse_button(view->backend, static_cast<int>(x),
-                          static_cast<int>(y), map_button(button), 0, 0);
+  webgtk_mouse_event event{};
+  event.type = WEBGTK_MOUSE_RELEASE;
+  event.x = x;
+  event.y = y;
+  event.button = map_button(button);
+  event.modifiers = current_modifiers(GTK_EVENT_CONTROLLER(gesture));
+  event.click_count = n_press > 0 ? n_press : 1;
+  dispatch_mouse(view, &event);
 }
 
-gboolean webgtk_on_scroll(GtkEventControllerScroll *, double dx, double dy,
-                          gpointer data) {
+gboolean webgtk_on_scroll(GtkEventControllerScroll *controller, double dx,
+                          double dy, gpointer data) {
   auto *view = static_cast<webgtk_view *>(data);
   if (view->destroyed) return FALSE;
-  // GtkEventControllerScroll has no cursor position; the last motion event
-  // supplies the coordinates for the engine's hit test.
-  view->ops->mouse_scroll(view->backend, view->width / 2, view->height / 2, dx,
-                          dy, 0);
+  webgtk_scroll_event event{};
+  event.dx = dx;
+  event.dy = dy;
+  event.modifiers = current_modifiers(GTK_EVENT_CONTROLLER(controller));
+  dispatch_scroll(view, &event);
   return TRUE;
 }
 
-gboolean webgtk_on_key_pressed(GtkEventControllerKey *, guint keyval, guint,
-                               GdkModifierType state, gpointer data) {
+gboolean webgtk_on_key_pressed(GtkEventControllerKey *, guint keyval,
+                               guint keycode, GdkModifierType state,
+                               gpointer data) {
   auto *view = static_cast<webgtk_view *>(data);
   if (view->destroyed) return FALSE;
-  return view->ops->key_event(view->backend, keyval, 1, map_modifiers(state)) ==
-                 WEBGTK_OK
-             ? TRUE
-             : FALSE;
+  webgtk_key_event event{};
+  event.type = WEBGTK_KEY_PRESS;
+  event.keyval = keyval;
+  event.keycode = keycode;
+  event.modifiers = map_modifiers(state);
+  event.text = key_text(keyval, event.modifiers);
+  view->key_pressed = true;
+  return dispatch_key(view, &event) == WEBGTK_OK ? TRUE : FALSE;
 }
 
-void webgtk_on_key_released(GtkEventControllerKey *, guint keyval, guint,
-                            GdkModifierType state, gpointer data) {
+void webgtk_on_key_released(GtkEventControllerKey *, guint keyval,
+                            guint keycode, GdkModifierType state,
+                            gpointer data) {
   auto *view = static_cast<webgtk_view *>(data);
   if (view->destroyed) return;
-  view->ops->key_event(view->backend, keyval, 0, map_modifiers(state));
+  webgtk_key_event event{};
+  event.type = WEBGTK_KEY_RELEASE;
+  event.keyval = keyval;
+  event.keycode = keycode;
+  event.modifiers = map_modifiers(state);
+  event.text = nullptr;
+  view->key_pressed = false;
+  dispatch_key(view, &event);
 }
+
+void webgtk_on_focus_enter(GtkEventControllerFocus *, gpointer data) {
+  auto *view = static_cast<webgtk_view *>(data);
+  if (view->destroyed) return;
+  dispatch_focus(view, true);
+}
+
+void webgtk_on_focus_leave(GtkEventControllerFocus *, gpointer data) {
+  auto *view = static_cast<webgtk_view *>(data);
+  if (view->destroyed) return;
+  dispatch_focus(view, false);
+}
+#else
+/* --- GTK3: traditional widget event signals --- */
+
+/* GTK3 reports the click count as distinct event types rather than a field. */
+int click_count_for(const GdkEventButton *event) {
+  switch (event->type) {
+    case GDK_2BUTTON_PRESS:
+      return 2;
+    case GDK_3BUTTON_PRESS:
+      return 3;
+    default:
+      return 1;
+  }
+}
+
+gboolean webgtk_on_motion_notify(GtkWidget *, GdkEventMotion *event,
+                                 gpointer data) {
+  auto *view = static_cast<webgtk_view *>(data);
+  if (view->destroyed) return FALSE;
+  view->pointer_x = event->x;
+  view->pointer_y = event->y;
+  view->pointer_valid = true;
+  webgtk_mouse_event out{};
+  out.type = WEBGTK_MOUSE_MOVE;
+  out.x = event->x;
+  out.y = event->y;
+  out.modifiers = map_modifiers(event->state);
+  dispatch_mouse(view, &out);
+  return FALSE;
+}
+
+gboolean webgtk_on_button_press(GtkWidget *, GdkEventButton *event,
+                                gpointer data) {
+  auto *view = static_cast<webgtk_view *>(data);
+  if (view->destroyed) return FALSE;
+  // A click gives the view keyboard focus, so subsequent key events arrive.
+  if (view->area) gtk_widget_grab_focus(view->area);
+  view->pointer_x = event->x;
+  view->pointer_y = event->y;
+  view->pointer_valid = true;
+  webgtk_mouse_event out{};
+  out.type = WEBGTK_MOUSE_PRESS;
+  out.x = event->x;
+  out.y = event->y;
+  out.button = map_button(event->button);
+  out.modifiers = map_modifiers(event->state);
+  out.click_count = click_count_for(event);
+  dispatch_mouse(view, &out);
+  return TRUE;
+}
+
+gboolean webgtk_on_button_release(GtkWidget *, GdkEventButton *event,
+                                  gpointer data) {
+  auto *view = static_cast<webgtk_view *>(data);
+  if (view->destroyed) return FALSE;
+  view->pointer_x = event->x;
+  view->pointer_y = event->y;
+  view->pointer_valid = true;
+  webgtk_mouse_event out{};
+  out.type = WEBGTK_MOUSE_RELEASE;
+  out.x = event->x;
+  out.y = event->y;
+  out.button = map_button(event->button);
+  out.modifiers = map_modifiers(event->state);
+  out.click_count = click_count_for(event);
+  dispatch_mouse(view, &out);
+  return TRUE;
+}
+
+gboolean webgtk_on_scroll_event(GtkWidget *, GdkEventScroll *event,
+                                gpointer data) {
+  auto *view = static_cast<webgtk_view *>(data);
+  if (view->destroyed) return FALSE;
+  view->pointer_x = event->x;
+  view->pointer_y = event->y;
+  view->pointer_valid = true;
+  webgtk_scroll_event out{};
+  switch (event->direction) {
+    case GDK_SCROLL_UP:
+      out.dy = 1.0;
+      break;
+    case GDK_SCROLL_DOWN:
+      out.dy = -1.0;
+      break;
+    case GDK_SCROLL_LEFT:
+      out.dx = 1.0;
+      break;
+    case GDK_SCROLL_RIGHT:
+      out.dx = -1.0;
+      break;
+    case GDK_SCROLL_SMOOTH:
+      out.dx = event->delta_x;
+      out.dy = event->delta_y;
+      break;
+    default:
+      return FALSE;
+  }
+  out.modifiers = map_modifiers(event->state);
+  dispatch_scroll(view, &out);
+  return TRUE;
+}
+
+gboolean webgtk_on_key_press(GtkWidget *, GdkEventKey *event, gpointer data) {
+  auto *view = static_cast<webgtk_view *>(data);
+  if (view->destroyed) return FALSE;
+  webgtk_key_event out{};
+  out.type = WEBGTK_KEY_PRESS;
+  out.keyval = event->keyval;
+  out.keycode = event->hardware_keycode;
+  out.modifiers = map_modifiers(event->state);
+  out.text = key_text(event->keyval, out.modifiers);
+  view->key_pressed = true;
+  // Feed the IM context so committed text still reaches text_input; the raw
+  // key is forwarded regardless, because the engine needs shortcuts too.
+  if (view->im_context)
+    gtk_im_context_filter_keypress(view->im_context, event);
+  return dispatch_key(view, &out) == WEBGTK_OK ? TRUE : FALSE;
+}
+
+gboolean webgtk_on_key_release(GtkWidget *, GdkEventKey *event, gpointer data) {
+  auto *view = static_cast<webgtk_view *>(data);
+  if (view->destroyed) return FALSE;
+  webgtk_key_event out{};
+  out.type = WEBGTK_KEY_RELEASE;
+  out.keyval = event->keyval;
+  out.keycode = event->hardware_keycode;
+  out.modifiers = map_modifiers(event->state);
+  out.text = nullptr;
+  view->key_pressed = false;
+  dispatch_key(view, &out);
+  return TRUE;
+}
+
+gboolean webgtk_on_focus_in(GtkWidget *, GdkEventFocus *, gpointer data) {
+  auto *view = static_cast<webgtk_view *>(data);
+  if (view->destroyed) return FALSE;
+  dispatch_focus(view, true);
+  return FALSE;
+}
+
+gboolean webgtk_on_focus_out(GtkWidget *, GdkEventFocus *, gpointer data) {
+  auto *view = static_cast<webgtk_view *>(data);
+  if (view->destroyed) return FALSE;
+  dispatch_focus(view, false);
+  return FALSE;
+}
+#endif
 
 void webgtk_on_im_commit(GtkIMContext *, gchar *text, gpointer data) {
   auto *view = static_cast<webgtk_view *>(data);
@@ -717,56 +1009,58 @@ GtkWidget *create_area(webgtk_view *view) {
   g_signal_connect(area, "resize", G_CALLBACK(webgtk_on_resize), view);
   g_signal_connect(area, "render", G_CALLBACK(webgtk_on_render), view);
 
-#if WEBGTK_GTK4
-  GtkEventController *motion = gtk_event_controller_motion_new();
-#else
-  GtkEventController *motion = gtk_event_controller_motion_new(area);
-#endif
-  g_signal_connect(motion, "motion", G_CALLBACK(webgtk_on_motion), view);
-#if WEBGTK_GTK4
-  gtk_widget_add_controller(area, motion);
-#endif
-
-#if WEBGTK_GTK4
-  GtkGesture *click = gtk_gesture_click_new();
-  gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(click), 0);
-#else
-  GtkGesture *click = gtk_gesture_multi_press_new(area);
-#endif
-  g_signal_connect(click, "pressed", G_CALLBACK(webgtk_on_button_pressed), view);
-  g_signal_connect(click, "released", G_CALLBACK(webgtk_on_button_released),
-                   view);
-#if WEBGTK_GTK4
-  gtk_widget_add_controller(area, GTK_EVENT_CONTROLLER(click));
-#endif
-
-#if WEBGTK_GTK4
-  GtkEventController *scroll =
-      gtk_event_controller_scroll_new(GTK_EVENT_CONTROLLER_SCROLL_BOTH_AXES);
-#else
-  GtkEventController *scroll = gtk_event_controller_scroll_new(
-      area, GTK_EVENT_CONTROLLER_SCROLL_BOTH_AXES);
-#endif
-  g_signal_connect(scroll, "scroll", G_CALLBACK(webgtk_on_scroll), view);
-#if WEBGTK_GTK4
-  gtk_widget_add_controller(area, scroll);
-#endif
-
-#if WEBGTK_GTK4
-  GtkEventController *key = gtk_event_controller_key_new();
-#else
-  GtkEventController *key = gtk_event_controller_key_new(area);
-#endif
+  /* An IM context shared by both paths: it turns key sequences into committed
+   * text, which is what reaches text_input. */
   view->im_context = gtk_im_context_simple_new();
   g_signal_connect(view->im_context, "commit", G_CALLBACK(webgtk_on_im_commit),
                    view);
+
+#if WEBGTK_GTK4
+  GtkEventController *motion = gtk_event_controller_motion_new();
+  g_signal_connect(motion, "motion", G_CALLBACK(webgtk_on_motion), view);
+  gtk_widget_add_controller(area, motion);
+
+  GtkGesture *click = gtk_gesture_click_new();
+  gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(click), 0);
+  g_signal_connect(click, "pressed", G_CALLBACK(webgtk_on_button_pressed), view);
+  g_signal_connect(click, "released", G_CALLBACK(webgtk_on_button_released),
+                   view);
+  gtk_widget_add_controller(area, GTK_EVENT_CONTROLLER(click));
+
+  GtkEventController *scroll =
+      gtk_event_controller_scroll_new(GTK_EVENT_CONTROLLER_SCROLL_BOTH_AXES);
+  g_signal_connect(scroll, "scroll", G_CALLBACK(webgtk_on_scroll), view);
+  gtk_widget_add_controller(area, scroll);
+
+  GtkEventController *key = gtk_event_controller_key_new();
   gtk_event_controller_key_set_im_context(GTK_EVENT_CONTROLLER_KEY(key),
                                           view->im_context);
   g_signal_connect(key, "key-pressed", G_CALLBACK(webgtk_on_key_pressed), view);
   g_signal_connect(key, "key-released", G_CALLBACK(webgtk_on_key_released),
                    view);
-#if WEBGTK_GTK4
   gtk_widget_add_controller(area, key);
+
+  GtkEventController *focus = gtk_event_controller_focus_new();
+  g_signal_connect(focus, "enter", G_CALLBACK(webgtk_on_focus_enter), view);
+  g_signal_connect(focus, "leave", G_CALLBACK(webgtk_on_focus_leave), view);
+  gtk_widget_add_controller(area, focus);
+#else
+  /* GTK3 forwards input through traditional widget signals. */
+  g_signal_connect(area, "motion-notify-event",
+                   G_CALLBACK(webgtk_on_motion_notify), view);
+  g_signal_connect(area, "button-press-event",
+                   G_CALLBACK(webgtk_on_button_press), view);
+  g_signal_connect(area, "button-release-event",
+                   G_CALLBACK(webgtk_on_button_release), view);
+  g_signal_connect(area, "scroll-event", G_CALLBACK(webgtk_on_scroll_event),
+                   view);
+  g_signal_connect(area, "key-press-event", G_CALLBACK(webgtk_on_key_press),
+                   view);
+  g_signal_connect(area, "key-release-event", G_CALLBACK(webgtk_on_key_release),
+                   view);
+  g_signal_connect(area, "focus-in-event", G_CALLBACK(webgtk_on_focus_in), view);
+  g_signal_connect(area, "focus-out-event", G_CALLBACK(webgtk_on_focus_out),
+                   view);
 #endif
 
   return area;
@@ -909,36 +1203,95 @@ webgtk_status webgtk_view_render(webgtk_view *view, uint8_t *buffer,
   return WEBGTK_OK;
 }
 
+/* The scalar helpers build the same rich event the GTK widgets do and go
+ * through the same dispatch, so both entry points behave identically. */
 webgtk_status webgtk_view_mouse_move(webgtk_view *view, int x, int y,
                                      unsigned modifiers) {
   if (!view) return WEBGTK_ERROR_INVALID_ARGUMENT;
-  return view->ops->mouse_move(view->backend, x, y, modifiers);
+  webgtk_mouse_event event{};
+  event.type = WEBGTK_MOUSE_MOVE;
+  event.x = x;
+  event.y = y;
+  event.modifiers = modifiers;
+  return webgtk_view_send_mouse_event(view, &event);
 }
 
 webgtk_status webgtk_view_mouse_button(webgtk_view *view, int x, int y,
                                        webgtk_mouse_button button, int pressed,
                                        unsigned modifiers) {
   if (!view) return WEBGTK_ERROR_INVALID_ARGUMENT;
-  return view->ops->mouse_button(view->backend, x, y, button, pressed,
-                                 modifiers);
+  webgtk_mouse_event event{};
+  event.type = pressed ? WEBGTK_MOUSE_PRESS : WEBGTK_MOUSE_RELEASE;
+  event.x = x;
+  event.y = y;
+  event.button = button;
+  event.modifiers = modifiers;
+  event.click_count = 1;
+  return webgtk_view_send_mouse_event(view, &event);
 }
 
 webgtk_status webgtk_view_mouse_scroll(webgtk_view *view, int x, int y,
                                        double dx, double dy,
                                        unsigned modifiers) {
   if (!view) return WEBGTK_ERROR_INVALID_ARGUMENT;
-  return view->ops->mouse_scroll(view->backend, x, y, dx, dy, modifiers);
+  /* The rich scroll event has no position, so record the caller's before
+   * dispatching; the scalar op path in dispatch_scroll reads it back. */
+  view->pointer_x = x;
+  view->pointer_y = y;
+  view->pointer_valid = true;
+  webgtk_scroll_event event{};
+  event.dx = dx;
+  event.dy = dy;
+  event.modifiers = modifiers;
+  return webgtk_view_send_scroll_event(view, &event);
 }
 
 webgtk_status webgtk_view_key_event(webgtk_view *view, uint32_t keysym,
                                     int pressed, unsigned modifiers) {
   if (!view) return WEBGTK_ERROR_INVALID_ARGUMENT;
-  return view->ops->key_event(view->backend, keysym, pressed, modifiers);
+  webgtk_key_event event{};
+  event.type = pressed ? WEBGTK_KEY_PRESS : WEBGTK_KEY_RELEASE;
+  event.keyval = keysym;
+  event.keycode = keysym;
+  event.modifiers = modifiers;
+  event.text = pressed ? key_text(keysym, modifiers) : nullptr;
+  return webgtk_view_send_key_event(view, &event);
 }
 
 webgtk_status webgtk_view_text_input(webgtk_view *view, const char *utf8) {
   if (!view || !utf8) return WEBGTK_ERROR_INVALID_ARGUMENT;
   return view->ops->text_input(view->backend, utf8);
+}
+
+webgtk_status webgtk_view_send_mouse_event(webgtk_view *view,
+                                           const webgtk_mouse_event *event) {
+  if (!view || !event) return WEBGTK_ERROR_INVALID_ARGUMENT;
+  if (view->destroyed) return WEBGTK_ERROR_INVALID_ARGUMENT;
+  view->pointer_x = event->x;
+  view->pointer_y = event->y;
+  view->pointer_valid = true;
+  return dispatch_mouse(view, event);
+}
+
+webgtk_status webgtk_view_send_key_event(webgtk_view *view,
+                                         const webgtk_key_event *event) {
+  if (!view || !event) return WEBGTK_ERROR_INVALID_ARGUMENT;
+  if (view->destroyed) return WEBGTK_ERROR_INVALID_ARGUMENT;
+  return dispatch_key(view, event);
+}
+
+webgtk_status webgtk_view_send_scroll_event(webgtk_view *view,
+                                            const webgtk_scroll_event *event) {
+  if (!view || !event) return WEBGTK_ERROR_INVALID_ARGUMENT;
+  if (view->destroyed) return WEBGTK_ERROR_INVALID_ARGUMENT;
+  return dispatch_scroll(view, event);
+}
+
+webgtk_status webgtk_view_send_focus_event(webgtk_view *view, int focused) {
+  if (!view) return WEBGTK_ERROR_INVALID_ARGUMENT;
+  if (view->destroyed) return WEBGTK_ERROR_INVALID_ARGUMENT;
+  dispatch_focus(view, focused != 0);
+  return WEBGTK_OK;
 }
 
 const char *webgtk_status_string(webgtk_status status) {

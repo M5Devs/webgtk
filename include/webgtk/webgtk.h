@@ -38,6 +38,50 @@ typedef enum {
   WEBGTK_MOUSE_RIGHT = 2
 } webgtk_mouse_button;
 
+/*
+ * Rich input events.
+ *
+ * The scalar helpers further down (webgtk_view_mouse_move and friends) are
+ * thin wrappers over these structs; the struct form is the one to use when the
+ * embedder already has the extra detail, because it carries the modifiers,
+ * click count, hardware keycode and committed text the engine needs to build a
+ * faithful input event. Coordinates are in backing-buffer pixels, top-left
+ * origin, matching webgtk_view_render.
+ */
+typedef enum {
+  WEBGTK_MOUSE_PRESS = 0,
+  WEBGTK_MOUSE_RELEASE = 1,
+  WEBGTK_MOUSE_MOVE = 2
+} webgtk_mouse_event_type;
+
+typedef struct {
+  webgtk_mouse_event_type type;
+  double x;
+  double y;
+  webgtk_mouse_button button; /* only meaningful for press/release */
+  unsigned modifiers;         /* WEBGTK_MOD_* bitmask */
+  int click_count;            /* 1 for a single click, 2 for a double, ... */
+} webgtk_mouse_event;
+
+typedef enum {
+  WEBGTK_KEY_PRESS = 0,
+  WEBGTK_KEY_RELEASE = 1
+} webgtk_key_event_type;
+
+typedef struct {
+  webgtk_key_event_type type;
+  uint32_t keyval;    /* GDK keyval */
+  uint32_t keycode;   /* hardware keycode */
+  unsigned modifiers; /* WEBGTK_MOD_* bitmask */
+  const char *text;   /* UTF-8 committed text, or NULL when not printable */
+} webgtk_key_event;
+
+typedef struct {
+  double dx;
+  double dy;
+  unsigned modifiers; /* WEBGTK_MOD_* bitmask */
+} webgtk_scroll_event;
+
 typedef struct webgtk_view webgtk_view;
 
 /*
@@ -155,6 +199,24 @@ WEBGTK_EXPORT webgtk_status webgtk_view_key_event(webgtk_view *view,
 /* Sends a UTF-8 string as committed text input (no keycode). */
 WEBGTK_EXPORT webgtk_status webgtk_view_text_input(webgtk_view *view,
                                                    const char *utf8);
+
+/*
+ * Rich input forwarding. These carry the full event (modifiers, click count,
+ * hardware keycode, committed text) straight through to the backend, which is
+ * what the GTK3/GTK4 widgets use internally. Prefer them when the detail is
+ * available. Each returns WEBGTK_ERROR_INVALID_ARGUMENT if `view` or `event`
+ * is NULL.
+ */
+WEBGTK_EXPORT webgtk_status webgtk_view_send_mouse_event(
+    webgtk_view *view, const webgtk_mouse_event *event);
+WEBGTK_EXPORT webgtk_status webgtk_view_send_key_event(
+    webgtk_view *view, const webgtk_key_event *event);
+WEBGTK_EXPORT webgtk_status webgtk_view_send_scroll_event(
+    webgtk_view *view, const webgtk_scroll_event *event);
+
+/* Reports that the view gained or lost keyboard focus. */
+WEBGTK_EXPORT webgtk_status webgtk_view_send_focus_event(webgtk_view *view,
+                                                         int focused);
 
 WEBGTK_EXPORT const char *webgtk_status_string(webgtk_status status);
 

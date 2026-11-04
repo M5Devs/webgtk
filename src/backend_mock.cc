@@ -42,11 +42,16 @@ struct MockState {
   int mouse_x = 0;
   int mouse_y = 0;
   bool mouse_pressed = false;
+  webgtk_mouse_button mouse_button = WEBGTK_MOUSE_LEFT;
   unsigned modifiers = 0;
   int click_count = 0;
   int scroll_count = 0;
+  double scroll_dx = 0.0;
+  double scroll_dy = 0.0;
   uint32_t last_keysym = 0;
+  uint32_t last_keycode = 0;
   int key_count = 0;
+  bool focused = false;
   std::string text;
 
   /* Script message IPC. `host_view` is the view the mock reports posts to.
@@ -90,13 +95,29 @@ void render_mock(MockState *state) {
   // a key event, red before that.
   fill_rect(state, 8, 8, 8, 8, state->key_count > 0 ? kKeyOn : kKeyOff);
 
-  // A block that follows the pointer, so input forwarding is observable in the
-  // rendered output.
-  fill_rect(state, state->mouse_x - 8, state->mouse_y - 8, 16, 16, kCursor);
+  // Focus marker just right of the key marker: filled when the view has focus.
+  fill_rect(state, 20, 8, 8, 8, state->focused ? kKeyOn : kKeyOff);
+
+  // A crosshair at the last pointer position, so the exact forwarded
+  // coordinates are visible in the frame.
+  fill_rect(state, state->mouse_x - 10, state->mouse_y, 21, 1, kCursor);
+  fill_rect(state, state->mouse_x, state->mouse_y - 10, 1, 21, kCursor);
+
+  // The button marker follows the crosshair; red while a button is held.
+  fill_rect(state, state->mouse_x - 2, state->mouse_y - 2, 4, 4,
+            state->mouse_pressed ? kKeyOff : kCursor);
 
   // One vertical bar per click, from the left edge, so clicks accumulate.
   for (int i = 0; i < state->click_count; ++i) {
     fill_rect(state, 8 + i * 6, state->height - 24, 3, 16, kCursor);
+  }
+
+  // The last key code as a row of 8x8 cells at the bottom-right, least
+  // significant bit first, so a typed key is readable from the pixels.
+  for (int bit = 0; bit < 8; ++bit) {
+    const bool set = (state->last_keysym >> bit) & 1u;
+    fill_rect(state, state->width - 16 - bit * 10, state->height - 16, 8, 8,
+              set ? kKeyOn : kKeyOff);
   }
 }
 
@@ -285,6 +306,65 @@ webgtk_status mock_render(void *self, Bitmap *out) {
   return WEBGTK_OK;
 }
 
+webgtk_status mock_send_mouse_event(void *self, const webgtk_mouse_event *event) {
+  auto *state = static_cast<MockState *>(self);
+  if (!state || !event) return WEBGTK_ERROR_INVALID_ARGUMENT;
+  state->mouse_x = static_cast<int>(event->x);
+  state->mouse_y = static_cast<int>(event->y);
+  state->modifiers = event->modifiers;
+  switch (event->type) {
+    case WEBGTK_MOUSE_PRESS:
+      state->mouse_pressed = true;
+      state->mouse_button = event->button;
+      state->click_count += event->click_count > 0 ? event->click_count : 1;
+      break;
+    case WEBGTK_MOUSE_RELEASE:
+      state->mouse_pressed = false;
+      state->mouse_button = event->button;
+      break;
+    case WEBGTK_MOUSE_MOVE:
+      break;
+  }
+  std::fprintf(stderr, "[webgtk-mock] mouse type=%d button=%d clicks=%d at %d,%d\n",
+               static_cast<int>(event->type), static_cast<int>(event->button),
+               event->click_count, state->mouse_x, state->mouse_y);
+  return WEBGTK_OK;
+}
+
+webgtk_status mock_send_key_event(void *self, const webgtk_key_event *event) {
+  auto *state = static_cast<MockState *>(self);
+  if (!state || !event) return WEBGTK_ERROR_INVALID_ARGUMENT;
+  state->last_keysym = event->keyval;
+  state->last_keycode = event->keycode;
+  state->modifiers = event->modifiers;
+  if (event->type == WEBGTK_KEY_PRESS) ++state->key_count;
+  std::fprintf(stderr, "[webgtk-mock] key=0x%x code=%u type=%d text=%s\n",
+               event->keyval, event->keycode, static_cast<int>(event->type),
+               event->text ? event->text : "(none)");
+  return WEBGTK_OK;
+}
+
+webgtk_status mock_send_scroll_event(void *self,
+                                     const webgtk_scroll_event *event) {
+  auto *state = static_cast<MockState *>(self);
+  if (!state || !event) return WEBGTK_ERROR_INVALID_ARGUMENT;
+  state->scroll_dx = event->dx;
+  state->scroll_dy = event->dy;
+  state->modifiers = event->modifiers;
+  ++state->scroll_count;
+  std::fprintf(stderr, "[webgtk-mock] scroll dx=%f dy=%f\n", event->dx,
+               event->dy);
+  return WEBGTK_OK;
+}
+
+webgtk_status mock_send_focus_event(void *self, int focused) {
+  auto *state = static_cast<MockState *>(self);
+  if (!state) return WEBGTK_ERROR_INVALID_ARGUMENT;
+  state->focused = focused != 0;
+  std::fprintf(stderr, "[webgtk-mock] focus=%d\n", focused);
+  return WEBGTK_OK;
+}
+
 webgtk_status mock_mouse_move(void *self, int x, int y, unsigned modifiers) {
   auto *state = static_cast<MockState *>(self);
   state->mouse_x = x;
@@ -349,6 +429,10 @@ const BackendOps kMockOps = {
     mock_mouse_scroll,
     mock_key_event,
     mock_text_input,
+    mock_send_mouse_event,
+    mock_send_key_event,
+    mock_send_scroll_event,
+    mock_send_focus_event,
     mock_add_script_message_handler,
     mock_remove_script_message_handler,
     mock_set_host_view,

@@ -77,6 +77,40 @@ and `webgtk_view_key_event` / `webgtk_view_text_input` calls. Call
 `webgtk_view_render` to pull the current frame into a caller-owned RGBA8 buffer,
 which is also how the headless tests assert on output.
 
+For richer input, build the event structs directly and hand them over; the GTK3
+and GTK4 widgets use these internally, so they carry everything the engine needs:
+
+```c
+webgtk_mouse_event press = {0};
+press.type = WEBGTK_MOUSE_PRESS;
+press.x = 120; press.y = 80;
+press.button = WEBGTK_MOUSE_LEFT;
+press.modifiers = WEBGTK_MOD_CONTROL;
+press.click_count = 2;               /* double click */
+webgtk_view_send_mouse_event(view, &press);
+
+webgtk_key_event key = {0};
+key.type = WEBGTK_KEY_PRESS;
+key.keyval = 0x41;                   /* 'A' */
+key.keycode = 38;                    /* hardware keycode */
+key.text = "A";                      /* NULL when not printable */
+webgtk_view_send_key_event(view, &key);
+
+webgtk_scroll_event scroll = {0};
+scroll.dy = -2.0;                    /* wheel down */
+webgtk_view_send_scroll_event(view, &scroll);
+
+webgtk_view_send_focus_event(view, 1);  /* view gained focus */
+```
+
+The widget wires its own toolkit's events to these entry points: GTK4 attaches
+`GtkGestureClick`, motion, scroll, key and focus controllers to the
+`GtkGLArea`; GTK3 connects the traditional `button-press-event`,
+`motion-notify-event`, `scroll-event`, `key-press-event` and focus signals and
+enables the matching event masks. Modifier state, click count, hardware keycode
+and committed text are all carried through, so a keystroke arrives as a real
+key press rather than a bare keysym.
+
 `webgtk_view_destroy` releases everything the view owns. If the widget was added
 to a container it is detached first; the view holds its own reference to the
 widget, so it is safe to destroy the view before or after the window.
