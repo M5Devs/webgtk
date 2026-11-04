@@ -24,6 +24,8 @@ PAGE = """<!doctype html>
   <p style="margin:0 24px">This page is rendered by the <b>mock</b> backend
      into a GtkGLArea, and this window is Python.</p>
   <p id="out" style="margin:24px;color:#7ee787">waiting for JavaScript&hellip;</p>
+  <button style="margin:0 24px" onclick="window.webgtk.postMessage(
+      'clicked', JSON.stringify({x: 1, y: 2}))">Post a message to Python</button>
 </body></html>
 """
 
@@ -99,6 +101,18 @@ def selftest(WebGTK, Gtk, gtk_version):
 
     check(int(WebGTK.MouseButton.RIGHT) == 2, "mouse-button enum is bound")
 
+    # The IPC bridge: a page post reaches Python with no polling loop. The mock
+    # replays window.webgtk.postMessage() natively, so this runs headless.
+    messages = []
+    view.connect("script-message-received",
+                 lambda _view, name, payload: messages.append((name, payload)))
+    view.run_javascript(
+        "window.webgtk.postMessage('clicked', JSON.stringify({x: 1, y: 2}))")
+    drain(Gtk, gtk_version)
+    check(len(messages) == 1, "script-message-received fired once")
+    check(messages and messages[0][0] == "clicked", "handler name delivered")
+    check(messages and "x" in messages[0][1], "JSON payload delivered")
+
     for failure in failures:
         print(f"FAIL: {failure}", file=sys.stderr)
     print(f"{len(failures)} failures")
@@ -120,7 +134,11 @@ def run_window(WebGTK, Gtk, gtk_version):
     def on_result(_view, json):
         print(f"javascript-result: {json}")
 
+    def on_message(_view, name, payload):
+        print(f"script-message-received: {name} -> {payload}")
+
     view.connect("javascript-result", on_result)
+    view.connect("script-message-received", on_message)
     view.load_html_string(PAGE)
     view.run_javascript("document.getElementById('out').textContent = "
                         "'JavaScript ran in the mock engine.'; 1 + 1")

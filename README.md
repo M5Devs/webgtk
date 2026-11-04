@@ -81,6 +81,38 @@ which is also how the headless tests assert on output.
 to a container it is detached first; the view holds its own reference to the
 widget, so it is safe to destroy the view before or after the window.
 
+## Talking to the page
+
+The page and the embedder share a small bridge. From JavaScript:
+
+```js
+window.webgtk.postMessage("clicked", JSON.stringify({x: 1, y: 2}));
+```
+
+The message is delivered to native code synchronously, with no polling loop.
+In C, register a handler for the name:
+
+```c
+static void on_clicked(webgtk_view *view, const char *name,
+                       const char *payload, void *user_data) {
+  printf("%s: %s\n", name, payload);
+}
+
+webgtk_view_add_script_message_handler(view, "clicked", on_clicked, NULL);
+```
+
+In a GI binding, connect the signal instead; it fires for every message and
+needs no registration:
+
+```python
+view.connect("script-message-received",
+             lambda _v, name, payload: print(name, payload))
+```
+
+The bridge is injected at document start, so `window.webgtk` exists before the
+page's own scripts run. Payloads are strings; JSON-encode objects in the page
+and decode them natively.
+
 ## Language bindings
 
 The same libraries ship GObject Introspection data, so the view is usable from

@@ -16,7 +16,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <map>
 #include <new>
+#include <string>
 
 #include <webgtk/webgtk.h>
 #include <webgtk/webgtk-view.h>
@@ -272,6 +274,10 @@ struct webgtk_view {
   const webgtk::BackendOps *ops;
   void *backend;
 
+  /* Script message handlers, keyed by name. Stored in a map so lookup is O(log
+   * n) and the callback pointers stay put while dispatch runs. */
+  std::map<std::string, webgtk::ScriptMessageHandler> script_handlers;
+
   webgtk::Bitmap frame;
   size_t frame_capacity;
 
@@ -352,6 +358,74 @@ GtkWidget *create_area(webgtk_view *view);
 
 }  // namespace
 
+/* -------------------------------------------------- script message dispatch -- */
+
+/* Called by a backend the moment the page posts a message. Everything here is
+ * synchronous: registered callbacks run, then the signal is emitted, so an
+ * embedder observes the post on the same main-loop turn that delivered it. */
+extern "C" void webgtk_view_dispatch_script_message(webgtk_view *view,
+                                                    const char *name,
+                                                    const char *payload) {
+  if (!view || view->destroyed) return;
+  const char *handler = name ? name : "";
+  const char *text = payload ? payload : "";
+
+  /* Look up before invoking: a callback may unregister handlers (or register
+   * new ones) re-entrantly, which would invalidate an iterator held across the
+   * call. Copying the pair keeps the callback and its user data stable. */
+  auto it = view->script_handlers.find(handler);
+  if (it != view->script_handlers.end()) {
+    webgtk::ScriptMessageHandler entry = it->second;
+    if (entry.callback) entry.callback(view, handler, text, entry.user_data);
+  }
+
+  g_signal_emit_by_name(view, "script-message-received", handler, text);
+}
+
+namespace {
+
+/* Payload carried from a backend thread to the GTK main thread. */
+struct PostedMessage {
+  webgtk_view *view;  // strong reference, dropped by the destroy notify
+  char *name;
+  char *payload;
+};
+
+char *dup_string(const char *s) {
+  const size_t n = std::strlen(s) + 1;
+  auto *copy = static_cast<char *>(g_malloc(n));
+  std::memcpy(copy, s, n);
+  return copy;
+}
+
+gboolean deliver_posted_message(gpointer data) {
+  auto *msg = static_cast<PostedMessage *>(data);
+  webgtk_view_dispatch_script_message(msg->view, msg->name, msg->payload);
+  return G_SOURCE_REMOVE;
+}
+
+void free_posted_message(gpointer data) {
+  auto *msg = static_cast<PostedMessage *>(data);
+  g_free(msg->name);
+  g_free(msg->payload);
+  g_object_unref(msg->view);
+  delete msg;
+}
+
+}  // namespace
+
+extern "C" bool webgtk_view_post_script_message(webgtk_view *view,
+                                                const char *name,
+                                                const char *payload) {
+  if (!view) return false;
+  auto *msg = new PostedMessage{view, dup_string(name ? name : ""),
+                                dup_string(payload ? payload : "")};
+  g_object_ref(view);  // keep the view alive until the idle runs
+  g_idle_add_full(G_PRIORITY_DEFAULT, deliver_posted_message, msg,
+                  free_posted_message);
+  return true;
+}
+
 /* GObject plumbing lives in extern "C" so the generated
  * webgtk_view_get_type() has C linkage and matches the public header. */
 extern "C" {
@@ -363,6 +437,8 @@ static void webgtk_view_init(webgtk_view *view) {
   view->im_context = nullptr;
   view->ops = nullptr;
   view->backend = nullptr;
+  new (&view->script_handlers)
+      std::map<std::string, webgtk::ScriptMessageHandler>();
   view->frame = webgtk::Bitmap{};
   view->frame_capacity = 0;
   view->blitter = GlBlitter{};
@@ -383,6 +459,7 @@ static void webgtk_view_finalize(GObject *object) {
   /* Last line of defence: the GL context may still be current during dispose,
    * so the blitter is released here, after the widget is gone. */
   if (view->blitter.ready) blitter_shutdown(&view->blitter);
+  view->script_handlers.~map();
   G_OBJECT_CLASS(webgtk_view_parent_class)->finalize(object);
 }
 
@@ -437,6 +514,12 @@ static void webgtk_view_class_init(WebGtkViewClass *klass) {
   g_signal_new("javascript-result", WEBGTK_TYPE_VIEW, G_SIGNAL_RUN_LAST, 0,
                nullptr, nullptr, g_cclosure_marshal_VOID__STRING,
                G_TYPE_NONE, 1, G_TYPE_STRING);
+
+  /* The binding-friendly face of the IPC bridge: one signal, two string
+   * arguments, so a Python or GJS listener needs no registration call. */
+  g_signal_new("script-message-received", WEBGTK_TYPE_VIEW, G_SIGNAL_RUN_LAST,
+               0, nullptr, nullptr, g_cclosure_marshal_generic, G_TYPE_NONE, 2,
+               G_TYPE_STRING, G_TYPE_STRING);
 }
 
 }  // extern "C"
@@ -713,6 +796,9 @@ static webgtk_view *webgtk_view_construct(int width, int height) {
     g_object_unref(view);
     return nullptr;
   }
+  /* Give the backend its host view before anything can post: the mock uses it
+   * to deliver posts synchronously, the engine to marshal them across. */
+  if (view->ops->set_host_view) view->ops->set_host_view(view->backend, view);
   view->area = create_area(view);
   if (!view->area) {
     g_object_unref(view);
@@ -768,6 +854,33 @@ webgtk_status webgtk_view_evaluate_javascript(
   if (!view || !script) return WEBGTK_ERROR_INVALID_ARGUMENT;
   return view->ops->evaluate_javascript(view->backend, script, callback,
                                         user_data);
+}
+
+webgtk_status webgtk_view_add_script_message_handler(
+    webgtk_view *view, const char *handler_name,
+    WebGtkScriptMessageCallback callback, void *user_data) {
+  if (!view || !handler_name || !handler_name[0] || !callback)
+    return WEBGTK_ERROR_INVALID_ARGUMENT;
+  if (view->destroyed) return WEBGTK_ERROR_INVALID_ARGUMENT;
+
+  /* Record the handler first, then tell the backend. If the backend cannot do
+   * IPC the handler stays registered but unreachable, and the return value
+   * says so rather than silently pretending the post will arrive. */
+  view->script_handlers[handler_name] =
+      webgtk::ScriptMessageHandler{callback, user_data};
+
+  if (!view->ops->add_script_message_handler)
+    return WEBGTK_ERROR_NOT_IMPLEMENTED;
+  return view->ops->add_script_message_handler(view->backend, handler_name);
+}
+
+webgtk_status webgtk_view_remove_script_message_handler(
+    webgtk_view *view, const char *handler_name) {
+  if (!view || !handler_name) return WEBGTK_ERROR_INVALID_ARGUMENT;
+  view->script_handlers.erase(handler_name);
+
+  if (!view->ops->remove_script_message_handler) return WEBGTK_OK;
+  return view->ops->remove_script_message_handler(view->backend, handler_name);
 }
 
 webgtk_status webgtk_view_set_size(webgtk_view *view, int width, int height) {

@@ -49,6 +49,11 @@ struct MockState {
   int key_count = 0;
   std::string text;
 
+  /* Script message IPC. `host_view` is the view the mock reports posts to.
+   * The view decides who observes a message (a registered C callback and/or
+   * the "script-message-received" signal), so the mock never filters by name. */
+  webgtk_view *host_view = nullptr;
+
   // Backing buffer handed to the view; reused between frames.
   std::vector<uint8_t> pixels;
 };
@@ -128,6 +133,65 @@ webgtk_status mock_load_html(void *self, const char *html, size_t length) {
   return WEBGTK_OK;
 }
 
+/* Extracts the handler name and payload from the one call shape the bridge
+ * produces, `window.webgtk.postMessage("name", payload)`, so the mock can
+ * replay a page post without a JavaScript engine. Returns false for anything
+ * else, which is every other script. */
+bool parse_post_message(const std::string &script, std::string *name,
+                        std::string *payload) {
+  constexpr char kMarker[] = "postMessage(";
+  const size_t at = script.find(kMarker);
+  if (at == std::string::npos) return false;
+  size_t i = at + sizeof(kMarker) - 1;
+
+  auto skip_space = [&script, &i]() {
+    while (i < script.size() && (script[i] == ' ' || script[i] == '\t')) ++i;
+  };
+  auto read_string = [&script, &i](std::string *out) {
+    if (i >= script.size() || (script[i] != '"' && script[i] != '\''))
+      return false;
+    const char quote = script[i++];
+    out->clear();
+    while (i < script.size() && script[i] != quote) {
+      if (script[i] == '\\' && i + 1 < script.size()) ++i;
+      *out += script[i++];
+    }
+    if (i >= script.size()) return false;
+    ++i;  // closing quote
+    return true;
+  };
+
+  skip_space();
+  if (!read_string(name)) return false;
+  skip_space();
+  if (i >= script.size() || script[i] != ',') return false;
+  ++i;
+  skip_space();
+  if (i < script.size() && (script[i] == '"' || script[i] == '\'')) {
+    if (!read_string(payload)) return false;
+  } else {
+    // Non-literal payload: hand back the raw argument text so callers can see
+    // exactly what the page passed.
+    const size_t start = i;
+    int depth = 0;
+    while (i < script.size()) {
+      const char c = script[i];
+      if (c == '(' || c == '[' || c == '{') ++depth;
+      if (c == ')' || c == ']' || c == '}') {
+        if (depth == 0) break;
+        --depth;
+      }
+      if (c == ',' && depth == 0) break;
+      ++i;
+    }
+    *payload = script.substr(start, i - start);
+    while (!payload->empty() &&
+           (payload->back() == ' ' || payload->back() == '\t'))
+      payload->pop_back();
+  }
+  return true;
+}
+
 std::string json_escape(const std::string &in) {
   std::string out;
   out.reserve(in.size() + 8);
@@ -161,14 +225,43 @@ webgtk_status mock_evaluate_javascript(
     void (*callback)(const char *json_result, void *user_data),
     void *user_data) {
   auto *state = static_cast<MockState *>(self);
+  const std::string source = script ? script : "";
+
+  /* The mock does not run JavaScript, so it recognises the one call shape that
+   * drives the IPC bridge and replays it natively. This is what lets a test
+   * assert "page posts -> C callback runs" without a real V8. */
+  std::string name;
+  std::string payload;
+  if (parse_post_message(source, &name, &payload)) {
+    webgtk_view_dispatch_script_message(state->host_view, name.c_str(),
+                                        payload.c_str());
+  }
+
   // The mock echoes the script instead of executing it. Callers get a
   // well-formed JSON envelope so plumbing can be tested before V8 exists.
   const std::string json =
       "{\"backend\":\"mock\",\"loaded\":" +
       std::string(state->has_content ? "true" : "false") +
-      ",\"script\":\"" + json_escape(script ? script : "") + "\"}";
+      ",\"script\":\"" + json_escape(source) + "\"}";
   if (callback) callback(json.c_str(), user_data);
   return WEBGTK_OK;
+}
+
+webgtk_status mock_add_script_message_handler(void *self, const char *name) {
+  // The view owns the registry; the mock only needs to accept the name.
+  (void)self;
+  if (!name || !name[0]) return WEBGTK_ERROR_INVALID_ARGUMENT;
+  return WEBGTK_OK;
+}
+
+webgtk_status mock_remove_script_message_handler(void *self, const char *name) {
+  (void)self;
+  if (!name) return WEBGTK_ERROR_INVALID_ARGUMENT;
+  return WEBGTK_OK;
+}
+
+void mock_set_host_view(void *self, webgtk_view *view) {
+  static_cast<MockState *>(self)->host_view = view;
 }
 
 webgtk_status mock_set_size(void *self, int width, int height) {
@@ -256,6 +349,9 @@ const BackendOps kMockOps = {
     mock_mouse_scroll,
     mock_key_event,
     mock_text_input,
+    mock_add_script_message_handler,
+    mock_remove_script_message_handler,
+    mock_set_host_view,
 };
 
 }  // namespace

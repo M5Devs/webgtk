@@ -56,6 +56,8 @@ struct _WebGtkViewClass {
 
   /* Signals. */
   void (*javascript_result)(WebGtkView *view, const char *json);
+  void (*script_message_received)(WebGtkView *view, const char *handler_name,
+                                  const char *message_payload);
 
   /* Keep this last so the struct can grow without breaking subclasses. */
   gpointer _webgtk_reserved[8];
@@ -98,6 +100,30 @@ WEBGTK_EXPORT WebGtkStatus webgtk_view_run_javascript(WebGtkView *view,
  * GBytes.
  */
 WEBGTK_EXPORT GBytes *webgtk_view_render_frame(WebGtkView *view);
+
+/*
+ * Registers a script message handler; the C ABI's function of the same shape
+ * lives in <webgtk/webgtk.h>. Bindings use the "script-message-received"
+ * signal instead, which needs no registration and no C callback:
+ *
+ *     view.connect("script-message-received",
+ *                  lambda _v, name, payload: ...)
+ *
+ * This entry point is C-only: g-ir-scanner cannot marshal a bare function
+ * pointer, so it is skipped for introspection.
+ */
+/**
+ * webgtk_view_add_script_message_handler: (skip)
+ */
+WEBGTK_EXPORT WebGtkStatus webgtk_view_add_script_message_handler(
+    WebGtkView *view, const char *handler_name,
+    WebGtkScriptMessageCallback callback, void *user_data);
+
+/**
+ * webgtk_view_remove_script_message_handler: (skip)
+ */
+WEBGTK_EXPORT WebGtkStatus webgtk_view_remove_script_message_handler(
+    WebGtkView *view, const char *handler_name);
 
 G_END_DECLS
 

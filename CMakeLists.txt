@@ -75,7 +75,8 @@ if(WEBGTK_ENABLE_SANITIZERS AND CMAKE_BUILD_TYPE STREQUAL "Debug"
   add_link_options(${WEBGTK_SANITIZE_FLAGS})
 endif()
 
-set(WEBGTK_SOURCES src/backend_mock.cc src/webgtk_view.cc)
+set(WEBGTK_SOURCES src/backend_mock.cc src/webgtk_view.cc
+                   src/webgtk_bridge_script.cc)
 if(WEBGTK_HAVE_ENGINE)
   list(APPEND WEBGTK_SOURCES src/backend_chromium.cc)
 endif()

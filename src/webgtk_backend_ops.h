@@ -59,7 +59,51 @@ struct BackendOps {
   webgtk_status (*key_event)(void *self, uint32_t keysym, int pressed,
                              unsigned modifiers);
   webgtk_status (*text_input)(void *self, const char *utf8);
+
+  // Script message handlers. `add` makes the engine route posts addressed to
+  // `name` back through the view's dispatch helper; `remove` stops that. Both
+  // are optional: a backend that cannot do IPC leaves them NULL and the view
+  // reports the handler as unsupported. See kWebGtkBridgeScript.
+  webgtk_status (*add_script_message_handler)(void *self, const char *name);
+  webgtk_status (*remove_script_message_handler)(void *self, const char *name);
+
+  // Hands the backend its host view so it can deliver script messages with
+  // webgtk_view_dispatch_script_message(). Called once, right after create(),
+  // before any other call. Optional; NULL for a backend that never posts.
+  void (*set_host_view)(void *self, webgtk_view *view);
 };
+
+// Defined in webgtk_view.cc. Backends call this on the GTK main thread when
+// the page posts a script message. It invokes every callback registered for
+// `name` and then emits "script-message-received"; both happen synchronously,
+// so a page post is observed with no main-loop round trip.
+extern "C" void webgtk_view_dispatch_script_message(webgtk_view *view,
+                                                    const char *name,
+                                                    const char *payload);
+
+// Thread-safe sibling of the above for backends whose engine runs off the GTK
+// main thread: it copies the strings and hops to the main context before
+// dispatching. Still event driven, never polled. Returns false if the view is
+// gone or the hop could not be queued.
+extern "C" bool webgtk_view_post_script_message(webgtk_view *view,
+                                                const char *name,
+                                                const char *payload);
+
+// A registered handler: the embedder's callback plus its user data.
+struct ScriptMessageHandler {
+  WebGtkScriptMessageCallback callback = nullptr;
+  void *user_data = nullptr;
+};
+
+// The page-side bridge. Backends inject this at document start; it is the
+// documented, stable half of the IPC contract:
+//
+//     window.webgtk.postMessage(name, payload)
+//
+// `__webgtk_internal_post` is the engine-provided sink. It is intentionally
+// not defined here: each backend wires its own native hook to it, which keeps
+// the bridge free of any one engine's details.
+extern const char kWebGtkBridgeScript[];
 
 // Backend registry. Exactly one backend is selected at view construction.
 const BackendOps *mock_backend();

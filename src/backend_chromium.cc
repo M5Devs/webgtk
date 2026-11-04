@@ -23,6 +23,10 @@
 // arrives on the GTK main thread and is marshalled onto that thread's task
 // runner. render() is synchronous: it posts a CopyFromSurface request and waits
 // on a condition variable for the copy callback.
+//
+// Script messages come back the other way: the page's post is observed on the
+// engine thread and forwarded with webgtk_view_post_script_message(), which
+// hops to the GTK main thread. Nothing polls.
 
 #include "webgtk_backend_ops.h"
 
@@ -33,14 +37,17 @@
 #include <condition_variable>
 #include <cstdint>
 #include <cstring>
+#include <map>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <string>
 #include <thread>
 #include <utility>
 #include <vector>
 
 #include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/json/json_writer.h"
 #include "base/location.h"
 #include "base/memory/raw_ptr.h"
@@ -53,10 +60,13 @@
 #include "components/viz/common/frame_sinks/copy_output_result.h"
 #include "content/public/app/content_main.h"
 #include "content/public/browser/navigation_controller.h"
+#include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_widget_host.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/browser/web_contents_observer.h"
+#include "content/public/common/isolated_world_ids.h"
 #include "content/public/common/referrer.h"
 #include "headless/lib/browser/headless_browser_impl.h"
 #include "headless/lib/browser/headless_web_contents_impl.h"
@@ -122,6 +132,23 @@ void Navigate(headless::HeadlessWebContents *contents, const GURL &url) {
                                         ui::PAGE_TRANSITION_TYPED, std::string());
 }
 
+// Injects the page-side bridge (kWebGtkBridgeScript) whenever a document
+// commits, so `window.webgtk` exists before the page's own scripts run. One
+// observer per backend; it lives on the engine thread with the WebContents.
+struct ChromiumBackend;
+
+class BridgeInjector : public content::WebContentsObserver {
+ public:
+  BridgeInjector(content::WebContents *contents, ChromiumBackend *backend)
+      : content::WebContentsObserver(contents), backend_(backend) {}
+
+  void DidFinishNavigation(
+      content::NavigationHandle *navigation_handle) override;
+
+ private:
+  raw_ptr<ChromiumBackend> backend_;
+};
+
 struct ChromiumBackend {
   // --- engine thread state ---
   raw_ptr<headless::HeadlessBrowser> browser = nullptr;
@@ -141,6 +168,41 @@ struct ChromiumBackend {
 
   int width = 0;
   int height = 0;
+
+  // --- script message IPC ---
+  // The host view receives posts through webgtk_view_post_script_message(),
+  // which marshals them to the GTK main thread. `handlers` guards against
+  // injecting the bridge for a name nobody registered.
+  webgtk_view *host_view = nullptr;
+  std::set<std::string> handlers;
+
+  // Injects the bridge on every document commit; engine-thread owned.
+  std::unique_ptr<BridgeInjector> injector;
+
+  // Injects the page-side bridge (kWebGtkBridgeScript) into the current main
+  // frame. Must run on the engine thread.
+  void InjectBridge() {
+    if (!web_contents) return;
+    content::WebContents *contents = ToWebContents(web_contents);
+    if (!contents) return;
+    content::RenderFrameHost *frame = contents->GetPrimaryMainFrame();
+    if (!frame) return;
+    // The bridge lives in the page's main world so `window.webgtk` is the
+    // page's own object. Content only allows main-world injection in the
+    // embedder configurations this backend targets (headless/webview); the
+    // call below is the documented opt-in for those.
+    content::RenderFrameHost::AllowInjectingJavaScript();
+    frame->ExecuteJavaScriptForTests(base::UTF8ToUTF16(kWebGtkBridgeScript),
+                                     base::NullCallback(),
+                                     content::ISOLATED_WORLD_ID_GLOBAL);
+  }
+
+  // Called on the engine thread by the renderer-side message binding. Forwards
+  // the post to the view, which hops to the GTK main thread.
+  void OnScriptMessage(const std::string &name, const std::string &payload) {
+    if (!host_view) return;
+    webgtk_view_post_script_message(host_view, name.c_str(), payload.c_str());
+  }
 
   // Latest frame copied out of the compositor, straight RGBA8. Owned here;
   // render() hands the pointer to the view, which copies and never frees it.
@@ -165,6 +227,9 @@ struct ChromiumBackend {
     web_contents = browser_context->CreateWebContents(std::move(params));
     if (content::WebContents *contents = ToWebContents(web_contents)) {
       contents->Resize(gfx::Rect(0, 0, width, height));
+      // Owns itself: it is tied to the WebContents' lifetime and unregisters
+      // on destruction.
+      injector = std::make_unique<BridgeInjector>(contents, this);
     }
     startup_ok = web_contents != nullptr;
     startup_done.Signal();
@@ -209,6 +274,15 @@ struct ChromiumBackend {
     frame_ready.notify_all();
   }
 };
+
+void BridgeInjector::DidFinishNavigation(
+    content::NavigationHandle *navigation_handle) {
+  // Subframes do not get their own bridge; the top document owns window.webgtk.
+  if (navigation_handle->IsInPrimaryMainFrame() &&
+      navigation_handle->HasCommitted() && !navigation_handle->IsErrorPage()) {
+    backend_->InjectBridge();
+  }
+}
 
 // ------------------------------------------------------------------ vtable
 
@@ -519,6 +593,32 @@ webgtk_status chromium_text_input(void *self, const char *utf8) {
   return WEBGTK_OK;
 }
 
+webgtk_status chromium_add_script_message_handler(void *self,
+                                                  const char *name) {
+  auto *backend = static_cast<ChromiumBackend *>(self);
+  if (!backend || !name || !name[0]) return WEBGTK_ERROR_INVALID_ARGUMENT;
+  std::string handler(name);
+  backend->handlers.insert(handler);
+  // Re-inject so a handler registered after the document loaded still takes
+  // effect; the bridge is idempotent, so a second injection is harmless.
+  backend->PostToEngine(base::BindOnce(
+      [](ChromiumBackend *b) { b->InjectBridge(); }, backend));
+  return WEBGTK_OK;
+}
+
+webgtk_status chromium_remove_script_message_handler(void *self,
+                                                     const char *name) {
+  auto *backend = static_cast<ChromiumBackend *>(self);
+  if (!backend || !name) return WEBGTK_ERROR_INVALID_ARGUMENT;
+  backend->handlers.erase(name);
+  return WEBGTK_OK;
+}
+
+void chromium_set_host_view(void *self, webgtk_view *view) {
+  auto *backend = static_cast<ChromiumBackend *>(self);
+  if (backend) backend->host_view = view;
+}
+
 const BackendOps kChromiumOps = {
     &chromium_name,
     &chromium_create,
@@ -533,6 +633,9 @@ const BackendOps kChromiumOps = {
     &chromium_mouse_scroll,
     &chromium_key_event,
     &chromium_text_input,
+    &chromium_add_script_message_handler,
+    &chromium_remove_script_message_handler,
+    &chromium_set_host_view,
 };
 
 }  // namespace

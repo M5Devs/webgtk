@@ -40,6 +40,21 @@ typedef enum {
 
 typedef struct webgtk_view webgtk_view;
 
+/*
+ * Script message callback. `view` is the view the message arrived on,
+ * `handler_name` the registered handler it was posted to and `payload` the
+ * UTF-8 string the page passed (objects are JSON-encoded by the injected
+ * bridge). Both strings are owned by the caller and only valid for the
+ * duration of the call.
+ *
+ * Invoked synchronously from the GTK main thread, on the same turn the
+ * backend delivered the message.
+ */
+typedef void (*WebGtkScriptMessageCallback)(webgtk_view *view,
+                                            const char *handler_name,
+                                            const char *json_or_text_payload,
+                                            void *user_data);
+
 /* Modifier bitmask for input forwarding (matches common GTK/X11 masks). */
 enum {
   WEBGTK_MOD_SHIFT = 1 << 0,
@@ -87,6 +102,29 @@ WEBGTK_EXPORT webgtk_status webgtk_view_evaluate_javascript(
     webgtk_view *view, const char *script,
     void (*callback)(const char *json_result, void *user_data),
     void *user_data);
+
+/*
+ * Registers `handler_name` as a script message handler. Registering a name
+ * again replaces the previous callback. The page reaches it through the
+ * injected bridge:
+ *
+ *     window.webgtk.postMessage("handler_name", payload)
+ *
+ * `payload` may be a string or any JSON-serialisable value; non-strings are
+ * stringified before dispatch. Registration may happen before or after the
+ * page loads; the bridge is installed on every document. Returns
+ * WEBGTK_ERROR_INVALID_ARGUMENT if `view`, `handler_name` or `callback` is
+ * NULL, or the name is empty.
+ */
+WEBGTK_EXPORT webgtk_status webgtk_view_add_script_message_handler(
+    webgtk_view *view, const char *handler_name,
+    WebGtkScriptMessageCallback callback, void *user_data);
+
+/* Removes a handler registered with webgtk_view_add_script_message_handler.
+ * Removing an unknown name is a no-op. Returns WEBGTK_ERROR_INVALID_ARGUMENT
+ * if `view` or `handler_name` is NULL. */
+WEBGTK_EXPORT webgtk_status webgtk_view_remove_script_message_handler(
+    webgtk_view *view, const char *handler_name);
 
 /* Resizes the backing buffer. */
 WEBGTK_EXPORT webgtk_status webgtk_view_set_size(webgtk_view *view, int width,

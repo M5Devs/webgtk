@@ -30,6 +30,103 @@ static void on_result(const char *json, void *user_data) {
   snprintf(buffer, 256, "%s", json ? json : "");
 }
 
+/* --- script message IPC -------------------------------------------------- */
+
+struct message_log {
+  int count;
+  char handler[64];
+  char payload[128];
+};
+
+static void on_script_message(webgtk_view *view, const char *handler_name,
+                              const char *payload, void *user_data) {
+  (void)view;
+  struct message_log *log = (struct message_log *)user_data;
+  ++log->count;
+  snprintf(log->handler, sizeof(log->handler), "%s",
+           handler_name ? handler_name : "");
+  snprintf(log->payload, sizeof(log->payload), "%s", payload ? payload : "");
+}
+
+static int signal_count = 0;
+static char signal_payload[128];
+
+static void on_script_message_signal(webgtk_view *view,
+                                     const char *handler_name,
+                                     const char *payload, void *user_data) {
+  (void)view;
+  (void)handler_name;
+  (void)user_data;
+  ++signal_count;
+  snprintf(signal_payload, sizeof(signal_payload), "%s", payload ? payload : "");
+}
+
+/* A page reaches native code through window.webgtk.postMessage(); the mock
+ * replays that call shape natively, so the whole path is exercised without a
+ * JavaScript engine. */
+static void test_script_messages(void) {
+  webgtk_view *view = webgtk_view_new(160, 120);
+  CHECK(view != NULL, "view created for IPC test");
+
+  struct message_log log = {0};
+  CHECK(webgtk_view_add_script_message_handler(view, "greeting",
+                                               on_script_message,
+                                               &log) == WEBGTK_OK,
+        "handler registration succeeds");
+
+  signal_count = 0;
+  g_signal_connect(view, "script-message-received",
+                   G_CALLBACK(on_script_message_signal), NULL);
+
+  /* The dispatch must be synchronous: the callback has already run by the time
+   * the evaluate call returns, with no main-loop iteration in between. That is
+   * the whole point of replacing a polling loop. */
+  CHECK(webgtk_view_evaluate_javascript(
+            view, "window.webgtk.postMessage('greeting', 'hello')", NULL,
+            NULL) == WEBGTK_OK,
+        "page post accepted");
+  CHECK(log.count == 1, "callback ran synchronously, no polling needed");
+  CHECK(strcmp(log.handler, "greeting") == 0, "handler name delivered");
+  CHECK(strcmp(log.payload, "hello") == 0, "payload delivered");
+  CHECK(signal_count == 1, "script-message-received signal emitted");
+  CHECK(strcmp(signal_payload, "hello") == 0, "signal carries the payload");
+
+  /* A post to a name nobody registered is dropped, exactly as the engine
+   * would drop it. */
+  CHECK(webgtk_view_evaluate_javascript(
+            view, "window.webgtk.postMessage('unknown', 'x')", NULL,
+            NULL) == WEBGTK_OK,
+        "post to unknown handler is accepted but dropped");
+  CHECK(log.count == 1, "unknown handler did not fire");
+
+  /* JSON payloads arrive as the string the page passed. */
+  CHECK(webgtk_view_evaluate_javascript(
+            view,
+            "window.webgtk.postMessage(\"greeting\", \"{\\\"n\\\":42}\")", NULL,
+            NULL) == WEBGTK_OK,
+        "JSON payload post accepted");
+  CHECK(log.count == 2, "second post delivered");
+  CHECK(strstr(log.payload, "42") != NULL, "JSON payload preserved");
+
+  CHECK(webgtk_view_remove_script_message_handler(view, "greeting") == WEBGTK_OK,
+        "handler removal succeeds");
+  CHECK(webgtk_view_evaluate_javascript(
+            view, "window.webgtk.postMessage('greeting', 'again')", NULL,
+            NULL) == WEBGTK_OK,
+        "post after removal is accepted");
+  CHECK(log.count == 2, "removed handler no longer fires");
+
+  CHECK(webgtk_view_add_script_message_handler(view, NULL, on_script_message,
+                                               &log) ==
+            WEBGTK_ERROR_INVALID_ARGUMENT,
+        "NULL handler name is rejected");
+  CHECK(webgtk_view_add_script_message_handler(view, "x", NULL, NULL) ==
+            WEBGTK_ERROR_INVALID_ARGUMENT,
+        "NULL callback is rejected");
+
+  webgtk_view_destroy(view);
+}
+
 static int count_non_uniform(const unsigned char *pixels, size_t size) {
   int distinct = 0;
   for (size_t i = 4; i + 3 < size; i += 4) {
@@ -132,6 +229,7 @@ int main(int argc, char **argv) {
 
   test_creation();
   test_loading_and_js();
+  test_script_messages();
   test_rendering();
   test_status_strings();
 
