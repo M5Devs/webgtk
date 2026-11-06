@@ -175,10 +175,54 @@ three seconds and produces ~17k targets.
 GN silently ignores arguments that are not declared, so this list stays valid
 across tree revisions.
 
+## Compile verification
+
+The pruned archive cannot produce a working engine, but it *can* compile the
+one translation unit that talks to Content. That is what
+`scripts/verify_engine.sh` does, and it is how API drift in
+`src/backend_chromium.cc` is caught without a full build:
+
+```sh
+scripts/setup_engine.sh                     # primed tree + out/webgtk
+scripts/verify_engine.sh --dir engine       # compile src/backend_chromium.cc
+```
+
+The script takes the exact command line `gn` emitted for a `//content` source
+file (`ninja -t commands obj/content/public/app/app/content_main_delegate.o`),
+rewrites it to build the backend instead, and compiles. Every `-I`, `-isystem`,
+`-D` and `-W... -Werror` flag is kept, so the engine's real headers are the
+ones the compiler sees and any signature change is a hard error.
+`scripts/engine_compile_flags.py` performs the rewrite; it drops only the
+depfile, the raw_ptr plugin (a Chromium code-health policy for Chromium's own
+`raw_ptr<>`-managed classes, not for embedder code) and color diagnostics.
+
+CMake exposes this as the `webgtk-verify-engine` target in source mode:
+
+```sh
+cmake -S . -B build -DWEBGTK_ENGINE_DIR=engine
+cmake --build build --target webgtk-verify-engine
+```
+
+`WEBGTK_ENGINE_DIR` does **not** link Chromium: there are no build outputs to
+link, and the backend cannot be compiled by CMake's own flags. The mock backend
+still backs the library, demos and tests; the verify target is the check that
+the real backend compiles.
+
+Two inputs the archive prunes are restored by `scripts/setup_engine.sh` because
+the compile needs them: the libc++ headers at the `DEPS` revision
+(`-nostdinc++` is in the gn flags) and a `testing/gtest/include/gtest/gtest_prod.h`
+stub (`//base/gtest_prod_util.h` includes it). Both are in the `gn_stubs`
+snapshot or fetched by the setup script, so a clean checkout reaches the same
+result.
+
 ## Status
 
 The mock build is complete and green: 4/4 tests pass under `xvfb-run`, zero
 warnings.
+
+The Chromium backend compiles cleanly against the real engine headers:
+`scripts/verify_engine.sh` builds `src/backend_chromium.cc` with gn's own flags
+and reports no error and no warning.
 
 The prebuilt path is verified end to end with a stub artifact: the downloader
 checksums and extracts, CMake finds `engine/prebuilt/`, compiles
@@ -186,10 +230,10 @@ checksums and extracts, CMake finds `engine/prebuilt/`, compiles
 with a working `RUNPATH`, and the closure collector copies a self-resolving set
 of shared libraries.
 
-What is **not** verified is a real engine: the artifact has never been produced
-from a full build. `src/backend_chromium.cc` is written against the APIs in the
-tree but has not been compiled against real Chromium headers. The first
-successful `build_engine.yml` run is what closes that gap.
+What is **not** verified is a linked engine: the artifact has never been
+produced from a full build, so the backend has not yet been run against a live
+Content stack. The first successful `build_engine.yml` run is what closes that
+gap.
 
 ### What the backend does
 

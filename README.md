@@ -58,8 +58,19 @@ That adds `src/backend_chromium.cc`, defines `WEBGTK_HAVE_ENGINE`, and links
 compiled once in CI (`.github/workflows/build_engine.yml`), never on your
 machine.
 
-`-DWEBGTK_ENGINE_DIR=<tree>` instead compiles against a Chromium source tree,
-which is only useful when working on the engine itself. See `docs/ENGINE.md`.
+`-DWEBGTK_ENGINE_DIR=<tree>` points CMake at a Chromium source tree instead. A
+pruned source tree cannot be linked, so this mode does not add the backend to
+the library; it exposes the `webgtk-verify-engine` target, which compiles
+`src/backend_chromium.cc` with the exact flags `gn` emits and fails on any API
+drift:
+
+```sh
+scripts/setup_engine.sh
+cmake -S . -B build -DWEBGTK_ENGINE_DIR=engine
+cmake --build build --target webgtk-verify-engine
+```
+
+See `docs/ENGINE.md` for what the setup script restores and how the check works.
 
 ## Using a view
 

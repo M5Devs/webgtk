@@ -23,6 +23,10 @@ engine/
 *.swp
 .DS_Store
 
+# Python bytecode
+__pycache__/
+*.pyc
+
 # ...and finally, the committed GN stub snapshot must win over every rule
 # above (its paths mirror engine paths like "build/" and "chrome/.../chromium/").
 !scripts/gn_stubs/

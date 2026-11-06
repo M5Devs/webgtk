@@ -32,6 +32,9 @@ EXTRA_FILES = [
     "build/util/LASTCHANGE.committime",
     "third_party/rust-toolchain/VERSION",
     "third_party/llvm-build/Release+Asserts/cr_build_revision",
+    # //base/gtest_prod_util.h includes this header; the archive drops
+    # //testing. It has no BUILD.gn role, only the FRIEND_TEST macro.
+    "testing/gtest/include/gtest/gtest_prod.h",
 ]
 
 HERE = os.path.dirname(os.path.abspath(__file__))

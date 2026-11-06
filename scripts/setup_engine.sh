@@ -24,6 +24,12 @@ PERFETTO_URL="https://android.googlesource.com/platform/external/perfetto.git"
 # Mirrors github.com/google/perfetto.git; same commits.
 PERFETTO_MIRROR="https://github.com/google/perfetto.git"
 PERFETTO_REV="5ca4307bd65b26906313b664d7efd7f3729c7767"  # pin from chromium/DEPS
+# libc++ headers, pinned by chromium/DEPS (libcxx_revision). The archive drops
+# third_party/libc++/src entirely, but the compile-verification build needs the
+# headers; the library sources are not needed for it.
+LIBCXX_URL="https://chromium.googlesource.com/external/github.com/llvm/llvm-project/libcxx"
+LIBCXX_MIRROR="https://github.com/llvm/llvm-project.git"
+LIBCXX_REV="9ba7713d3a0f1e179904c984bb626748b15e57d6"  # pin from chromium/DEPS
 GN_PACKAGE="gn/gn/linux-amd64"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -77,31 +83,56 @@ fi
 # the exact revision chromium/DEPS pins. android.googlesource.com refuses to
 # serve this revision by name, so fetch the single commit (the mirrors do
 # serve it) instead of cloning the default branch and checking out.
-fetch_perfetto() {
-  local dest="$1" url
-  for url in "$PERFETTO_URL" "$PERFETTO_MIRROR" \
-             "https://chromium.googlesource.com/external/github.com/google/perfetto.git"; do
+fetch_pinned() {
+  local dest="$1" rev="$2" url
+  shift 2
+  for url in "$@"; do
     rm -rf "$dest"
     if git init -q "$dest" &&
        git -C "$dest" remote add origin "$url" &&
-       git -C "$dest" fetch -q --depth 1 origin "$PERFETTO_REV" &&
+       git -C "$dest" fetch -q --depth 1 origin "$rev" &&
        git -C "$dest" checkout -q FETCH_HEAD; then
       rm -rf "$dest/.git"
       return 0
     fi
-    echo "note: fetch of $PERFETTO_REV from $url failed, trying next mirror" >&2
+    echo "note: fetch of $rev from $url failed, trying next mirror" >&2
   done
   return 1
 }
 
 if [ ! -f "$SRC_DIR/third_party/perfetto/BUILD.gn" ]; then
   log "Restoring third_party/perfetto at $PERFETTO_REV"
-  fetch_perfetto "$SRC_DIR/third_party/perfetto" || {
+  fetch_pinned "$SRC_DIR/third_party/perfetto" "$PERFETTO_REV" \
+    "$PERFETTO_URL" "$PERFETTO_MIRROR" \
+    "https://chromium.googlesource.com/external/github.com/google/perfetto.git" || {
     echo "error: could not fetch perfetto at $PERFETTO_REV" >&2
     exit 1
   }
 else
   log "perfetto already restored"
+fi
+
+# ---------------------------------------------------------------------- libc++
+# The archive drops third_party/libc++/src, but the compile-verification build
+# (scripts/verify_engine.sh) needs the headers: gn's compile flags pass
+# -nostdinc++ and -isystem the libc++ include directory, so without them every
+# standard-library header fails to resolve. Restore the headers at the exact
+# revision chromium/DEPS pins; the library sources are not needed.
+if [ ! -d "$SRC_DIR/third_party/libc++/src/include" ]; then
+  log "Restoring third_party/libc++ headers at $LIBCXX_REV"
+  LIBCXX_TMP="$ENGINE_DIR/.libcxx-fetch"
+  fetch_pinned "$LIBCXX_TMP" "$LIBCXX_REV" "$LIBCXX_URL" "$LIBCXX_MIRROR" || {
+    echo "error: could not fetch libc++ at $LIBCXX_REV" >&2
+    exit 1
+  }
+  mkdir -p "$SRC_DIR/third_party/libc++/src"
+  cp -a "$LIBCXX_TMP/include" "$SRC_DIR/third_party/libc++/src/include"
+  rm -rf "$LIBCXX_TMP"
+  # gn generates __config_site from buildtools/third_party/libc++/__config_site.
+  cp "$SRC_DIR/buildtools/third_party/libc++/__config_site" \
+     "$SRC_DIR/third_party/libc++/src/include/__config_site"
+else
+  log "libc++ headers already restored"
 fi
 
 # ----------------------------------------------------------- host interpreter

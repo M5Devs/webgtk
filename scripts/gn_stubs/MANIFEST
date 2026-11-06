@@ -90,6 +90,7 @@ testing/buildbot/filters/BUILD.gn
 testing/data_driven_testing/BUILD.gn
 testing/gmock/BUILD.gn
 testing/gtest/BUILD.gn
+testing/gtest/include/gtest/gtest_prod.h
 testing/libfuzzer/BUILD.gn
 testing/libfuzzer/fuzzers/mach/BUILD.gn
 testing/libfuzzer/proto/BUILD.gn

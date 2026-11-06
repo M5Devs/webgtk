@@ -8,13 +8,10 @@
 //
 // Build status
 // ------------
-// This file is compiled only when WEBGTK_ENGINE_DIR is configured. It has NOT
-// been compile-verified. The archive published on Hugging Face is a *pruned
-// Chromium source tree* that is missing what `gn gen` needs (testing/,
-// third_party/libevent, the clang and Rust toolchains, several .gni files), so
-// the engine cannot be built from it yet. Every API used below was read out of
-// that tree, so the calls match the source revision; the first compile against
-// a complete checkout is still the real review. See docs/ENGINE.md.
+// This file is compiled only when WEBGTK_ENGINE_DIR is configured. It is
+// compile-verified against the pruned engine archive: scripts/verify_engine.sh
+// builds every generated header the translation unit needs and compiles it with
+// the exact flags gn emits for a //content source file. See docs/ENGINE.md.
 //
 // Threading model
 // ---------------
@@ -196,16 +193,16 @@ struct ChromiumBackend {
     if (!web_contents) return;
     content::WebContents *contents = ToWebContents(web_contents);
     if (!contents) return;
-    content::RenderFrameHost *frame = contents->GetPrimaryMainFrame();
-    if (!frame) return;
+    content::RenderFrameHost *main_frame = contents->GetPrimaryMainFrame();
+    if (!main_frame) return;
     // The bridge lives in the page's main world so `window.webgtk` is the
     // page's own object. Content only allows main-world injection in the
     // embedder configurations this backend targets (headless/webview); the
     // call below is the documented opt-in for those.
     content::RenderFrameHost::AllowInjectingJavaScript();
-    frame->ExecuteJavaScriptForTests(base::UTF8ToUTF16(kWebGtkBridgeScript),
-                                     base::NullCallback(),
-                                     content::ISOLATED_WORLD_ID_GLOBAL);
+    main_frame->ExecuteJavaScriptForTests(base::UTF8ToUTF16(kWebGtkBridgeScript),
+                                          base::NullCallback(),
+                                          content::ISOLATED_WORLD_ID_GLOBAL);
   }
 
   // Called on the engine thread by the renderer-side message binding. Forwards
@@ -246,7 +243,7 @@ struct ChromiumBackend {
     startup_done.Signal();
   }
 
-  void CopyCallback(const viz::CopyFromSurfaceResult &result) {
+  void CopyCallback(const content::CopyFromSurfaceResult &result) {
     std::lock_guard<std::mutex> lock(mutex);
     if (result.has_value()) {
       const SkBitmap &bitmap = result->bitmap;
@@ -462,9 +459,9 @@ webgtk_status chromium_render(void *self, Bitmap *out) {
   std::unique_lock<std::mutex> lock(backend->mutex);
   if (!backend->frame_ready.wait_for(lock, kFrameWait,
                                      [backend] { return backend->copy_done; })) {
-    return WEBGTK_ERROR_RENDER_FAILED;
+    return WEBGTK_ERROR_INTERNAL;
   }
-  if (backend->frame.empty()) return WEBGTK_ERROR_RENDER_FAILED;
+  if (backend->frame.empty()) return WEBGTK_ERROR_INTERNAL;
 
   out->data = backend->frame.data();
   out->width = backend->frame_width;
@@ -544,12 +541,15 @@ webgtk_status chromium_mouse_scroll(void *self, int x, int y, double dx,
         content::RenderWidgetHost *host =
             contents->GetPrimaryMainFrame()->GetRenderWidgetHost();
         if (!host) return;
-        WebMouseWheelEvent event(WebInputEvent::Type::kMouseWheel,
-                                 gfx::PointF(px, py), gfx::PointF(px, py),
-                                 WebMouseEvent::Button::kNoButton, 0, mods,
-                                 base::TimeTicks::Now());
+        WebMouseWheelEvent event;
+        event.SetType(WebInputEvent::Type::kMouseWheel);
+        event.SetModifiers(mods);
+        event.SetTimeStamp(base::TimeTicks::Now());
+        event.SetPositionInWidget(px, py);
+        event.SetPositionInScreen(px, py);
         event.delta_x = static_cast<float>(ddx);
         event.delta_y = static_cast<float>(ddy);
+        event.delta_units = ui::ScrollGranularity::kScrollByPixel;
         host->ForwardWheelEvent(event);
       },
       backend, x, y, dx, dy, static_cast<int>(modifiers)));
@@ -674,6 +674,31 @@ webgtk_status chromium_send_key_event(void *self,
   return WEBGTK_OK;
 }
 
+webgtk_status chromium_send_scroll_event(void *self,
+                                         const webgtk_scroll_event *event) {
+  auto *backend = static_cast<ChromiumBackend *>(self);
+  if (!backend || !event) return WEBGTK_ERROR_INVALID_ARGUMENT;
+  backend->PostToEngine(base::BindOnce(
+      [](ChromiumBackend *b, webgtk_scroll_event ev) {
+        if (!b->web_contents) return;
+        content::WebContents *contents = ToWebContents(b->web_contents);
+        if (!contents) return;
+        content::RenderWidgetHost *host =
+            contents->GetPrimaryMainFrame()->GetRenderWidgetHost();
+        if (!host) return;
+        WebMouseWheelEvent wheel;
+        wheel.SetType(WebInputEvent::Type::kMouseWheel);
+        wheel.SetModifiers(blink_modifiers(ev.modifiers));
+        wheel.SetTimeStamp(base::TimeTicks::Now());
+        wheel.delta_x = static_cast<float>(ev.dx);
+        wheel.delta_y = static_cast<float>(ev.dy);
+        wheel.delta_units = ui::ScrollGranularity::kScrollByPixel;
+        host->ForwardWheelEvent(wheel);
+      },
+      backend, *event));
+  return WEBGTK_OK;
+}
+
 webgtk_status chromium_send_focus_event(void *self, int focused) {
   auto *backend = static_cast<ChromiumBackend *>(self);
   if (!backend) return WEBGTK_ERROR_INVALID_ARGUMENT;
@@ -736,6 +761,7 @@ const BackendOps kChromiumOps = {
     &chromium_text_input,
     &chromium_send_mouse_event,
     &chromium_send_key_event,
+    &chromium_send_scroll_event,
     &chromium_send_focus_event,
     &chromium_add_script_message_handler,
     &chromium_remove_script_message_handler,

@@ -7,9 +7,11 @@
 #   gtk3-demo      -> GTK3 embedder demo
 #   gtk4-demo      -> GTK4 embedder demo
 #
-# The Blink/V8 engine archive is optional. Point WEBGTK_ENGINE_DIR at a tree
-# containing include/ and lib/ to link the real backend; otherwise the mock
-# backend is used and everything still builds and tests.
+# The Blink/V8 engine is optional. Download the prebuilt engine
+# (scripts/download_engine_prebuilt.sh) to link the real backend; otherwise the
+# mock backend is used and everything still builds and tests. Pointing
+# WEBGTK_ENGINE_DIR at a Chromium source tree adds a compile-verification target
+# for the backend instead of linking it.
 
 cmake_minimum_required(VERSION 3.16)
 project(webgtk VERSION 0.1.0 LANGUAGES C CXX)
@@ -38,10 +40,17 @@ option(WEBGTK_USE_PREBUILT_ENGINE
        OFF)
 
 # Engine resolution, in priority order:
-#   1. WEBGTK_ENGINE_DIR      - compile against a Chromium source tree
+#   1. WEBGTK_ENGINE_DIR      - compile-check the backend against a source tree
 #   2. WEBGTK_USE_PREBUILT_ENGINE=ON - link engine/prebuilt
 #   3. engine/prebuilt exists  - use it automatically
 #   4. none                    - mock backend only
+#
+# A Chromium source tree alone cannot be linked from: the pruned archive has no
+# build outputs, and compiling src/backend_chromium.cc needs the exact flags gn
+# emits (which CMake cannot reproduce). So WEBGTK_ENGINE_DIR selects a *compile
+# verification* build: the backend is checked against the real headers by the
+# `webgtk-verify-engine` target, and the mock backend still backs the demos and
+# tests. Linking the real backend happens through the prebuilt artifact.
 set(WEBGTK_ENGINE_PREBUILT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/engine/prebuilt")
 
 if(WEBGTK_ENGINE_DIR)
@@ -54,7 +63,9 @@ else()
   set(WEBGTK_ENGINE_MODE "mock")
 endif()
 
-if(NOT WEBGTK_ENGINE_MODE STREQUAL "mock")
+# Only a prebuilt artifact is linkable, so only then is the Chromium backend
+# compiled into the library. Source mode compile-checks it out of band.
+if(WEBGTK_ENGINE_MODE STREQUAL "prebuilt")
   set(WEBGTK_HAVE_ENGINE 1)
 else()
   set(WEBGTK_HAVE_ENGINE 0)
@@ -82,17 +93,14 @@ if(WEBGTK_HAVE_ENGINE)
 endif()
 
 # Compilation happens in the OBJECT library, so the engine headers go there.
-# A source-tree build compiles against the checkout; a prebuilt build compiles
-# against the staged headers and generated headers in the artifact.
+# A prebuilt build compiles against the staged headers and generated headers in
+# the artifact. Source mode does not add headers here: the backend is checked
+# separately, with the flags gn emits (see webgtk-verify-engine below).
 function(webgtk_engine_include_dirs target)
   if(WEBGTK_ENGINE_MODE STREQUAL "prebuilt")
     target_include_directories(${target} PRIVATE
       ${WEBGTK_ENGINE_PREBUILT_DIR}/include
       ${WEBGTK_ENGINE_PREBUILT_DIR}/gen)
-  elseif(WEBGTK_ENGINE_MODE STREQUAL "source")
-    target_include_directories(${target} PRIVATE
-      ${WEBGTK_ENGINE_DIR}/chromium
-      ${WEBGTK_ENGINE_DIR}/chromium/out/webgtk/gen)
   endif()
 endfunction()
 
@@ -113,9 +121,6 @@ function(webgtk_link_engine target)
     set_target_properties(${target} PROPERTIES
       BUILD_RPATH "${WEBGTK_ENGINE_PREBUILT_DIR}/lib"
       INSTALL_RPATH "${WEBGTK_ENGINE_PREBUILT_DIR}/lib")
-  elseif(WEBGTK_ENGINE_MODE STREQUAL "source")
-    target_link_directories(${target} PRIVATE ${WEBGTK_ENGINE_DIR}/lib)
-    target_link_libraries(${target} PRIVATE webgtk_engine)
   endif()
 endfunction()
 
@@ -150,10 +155,25 @@ target_compile_definitions(webgtk_gtk4_objs PRIVATE WEBGTK_GTK4=1)
 webgtk_add_shared(webgtk webgtk_gtk3_objs)
 webgtk_add_shared(webgtk4 webgtk_gtk4_objs)
 
+# ---- Engine compile verification -----------------------------------------
+# Source mode cannot link Chromium, but it can prove src/backend_chromium.cc
+# still matches the engine's headers. scripts/verify_engine.sh extracts the
+# exact flags gn emits for a //content source file and compiles the backend
+# with them, generating the headers it needs along the way. Exposed as a target
+# so `cmake --build build --target webgtk-verify-engine` runs the check.
+if(WEBGTK_ENGINE_MODE STREQUAL "source")
+  add_custom_target(webgtk-verify-engine
+    COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/scripts/verify_engine.sh"
+            --dir "${WEBGTK_ENGINE_DIR}"
+    COMMENT "Compile-verifying src/backend_chromium.cc against the engine source"
+    USES_TERMINAL VERBATIM)
+endif()
+
 if(WEBGTK_ENGINE_MODE STREQUAL "prebuilt")
   message(STATUS "WebGTK: linking prebuilt engine from ${WEBGTK_ENGINE_PREBUILT_DIR}")
 elseif(WEBGTK_ENGINE_MODE STREQUAL "source")
-  message(STATUS "WebGTK: compiling against engine source ${WEBGTK_ENGINE_DIR}")
+  message(STATUS "WebGTK: engine source at ${WEBGTK_ENGINE_DIR} "
+                 "(build target webgtk-verify-engine to compile-check the backend)")
 else()
   message(STATUS "WebGTK: no engine configured, mock backend only "
                  "(run scripts/download_engine_prebuilt.sh to enable it)")
