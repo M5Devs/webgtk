@@ -16,6 +16,10 @@
 cmake_minimum_required(VERSION 3.16)
 project(webgtk VERSION 0.1.0 LANGUAGES C CXX)
 
+# GNUInstallDirs gives the canonical lib/include/share names and, on Debian and
+# Ubuntu, the multiarch library dir. The .pc files and the packages rely on it.
+include(GNUInstallDirs)
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -143,6 +147,10 @@ function(webgtk_add_shared target objects)
   add_library(${target} SHARED)
   # PUBLIC so consumers inherit the include dirs and GTK dependency.
   target_link_libraries(${target} PUBLIC ${objects})
+  # A stable soname so packaged binaries keep working across patch releases.
+  set_target_properties(${target} PROPERTIES
+    VERSION ${PROJECT_VERSION}
+    SOVERSION ${PROJECT_VERSION_MAJOR})
   if(WEBGTK_HAVE_ENGINE)
     webgtk_link_engine(${target})
   endif()
@@ -250,8 +258,15 @@ function(webgtk_add_introspection target gtk_target nsversion gtk_major)
   add_custom_target(webgtk-gir-${gtk_major} ALL DEPENDS "${gir}" "${typelib}")
   add_dependencies(webgtk-gir-${gtk_major} ${target})
 
-  install(FILES "${gir}" "${typelib}"
-          DESTINATION ${CMAKE_INSTALL_DATADIR}/gir-1.0)
+  # The typelib goes to lib/girepository-1.0, a version-independent libdir with
+  # no multiarch suffix. The .gir is a development file, so it ships in the
+  # devel component alongside the headers.
+  install(FILES "${typelib}"
+          DESTINATION ${CMAKE_INSTALL_LIBDIR}/girepository-1.0
+          COMPONENT runtime)
+  install(FILES "${gir}"
+          DESTINATION ${CMAKE_INSTALL_DATADIR}/gir-1.0
+          COMPONENT devel)
 endfunction()
 
 webgtk_add_introspection(webgtk Gtk-3.0 1.0 gtk3)
@@ -342,3 +357,132 @@ if(WEBGTK_BUILD_TESTS)
                    "(need PyGObject and the introspection tools)")
   endif()
 endif()
+
+# ---- Installation --------------------------------------------------------
+#
+# Every install rule names a component, so one install tree can be split into
+# separate packages. CPack turns the components into:
+#
+#   runtime -> libwebgtk0      the shared libraries and the typelibs
+#   devel   -> libwebgtk-dev   headers, pkg-config files, .gir, unversioned .so
+#   demo    -> webgtk-demos    the GTK3/GTK4 demo binaries
+set(WEBGTK_RUNTIME_PACKAGE "libwebgtk0")
+set(WEBGTK_DEVEL_PACKAGE "libwebgtk-dev")
+set(WEBGTK_DEMO_PACKAGE "webgtk-demos")
+
+# NAMELINK_COMPONENT sends the bare libwebgtk.so symlink (the linker input) to
+# the devel package and keeps the versioned real file in runtime.
+install(TARGETS webgtk webgtk4
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+                COMPONENT runtime
+                NAMELINK_COMPONENT devel)
+
+install(FILES
+          "${CMAKE_CURRENT_SOURCE_DIR}/include/webgtk/webgtk.h"
+          "${CMAKE_CURRENT_SOURCE_DIR}/include/webgtk/webgtk-view.h"
+        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/webgtk
+        COMPONENT devel)
+
+if(WEBGTK_BUILD_DEMOS)
+  install(TARGETS gtk3-demo gtk4-demo
+          RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT demo)
+endif()
+
+# pkg-config files. The prefix is written relative to the .pc location, so the
+# installed tree is relocatable: `pkg-config --variable=includedir webgtk-1.0`
+# resolves correctly wherever the tree is unpacked.
+function(webgtk_add_pkgconfig module_name gtk_module libname description)
+  set(pcdir "${CMAKE_INSTALL_LIBDIR}/pkgconfig")
+  # ${pcfiledir} is <prefix>/<pcdir>; walk back up to <prefix>.
+  file(RELATIVE_PATH pc_prefix_from_pcdir "${CMAKE_INSTALL_FULL_LIBDIR}/pkgconfig"
+       "${CMAKE_INSTALL_PREFIX}")
+  set(WEBGTK_PC_PREFIX_FROM_PCDIR "${pc_prefix_from_pcdir}")
+  set(WEBGTK_PC_NAME "${module_name}")
+  set(WEBGTK_PC_DESCRIPTION "${description}")
+  set(WEBGTK_PC_LIBNAME "${libname}")
+  set(WEBGTK_PC_GTK_MODULE "${gtk_module}")
+  configure_file("${CMAKE_CURRENT_SOURCE_DIR}/cmake/webgtk.pc.in"
+                 "${CMAKE_CURRENT_BINARY_DIR}/${module_name}.pc" @ONLY)
+  install(FILES "${CMAKE_CURRENT_BINARY_DIR}/${module_name}.pc"
+          DESTINATION ${pcdir} COMPONENT devel)
+endfunction()
+
+webgtk_add_pkgconfig(webgtk-1.0 gtk+-3.0 webgtk
+  "WebGTK GTK3 view - lightweight webview on a pruned Blink/V8 core")
+webgtk_add_pkgconfig(webgtk-4.0 gtk4 webgtk4
+  "WebGTK GTK4 view - lightweight webview on a pruned Blink/V8 core")
+
+# ---- Packaging (CPack) ---------------------------------------------------
+#
+# Two portable archives and up to three .deb packages:
+#   webgtk-<ver>-linux-<arch>.tar.gz    the whole install tree, relocatable
+#   libwebgtk0_<ver>-1_<arch>.deb       runtime
+#   libwebgtk-dev_<ver>-1_<arch>.deb    development files
+#   webgtk-demos_<ver>-1_<arch>.deb     demos
+set(WEBGTK_DEB_ARCH "")
+execute_process(COMMAND dpkg --print-architecture
+                OUTPUT_VARIABLE WEBGTK_DEB_ARCH
+                OUTPUT_STRIP_TRAILING_WHITESPACE
+                ERROR_QUIET)
+if(NOT WEBGTK_DEB_ARCH)
+  if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64")
+    set(WEBGTK_DEB_ARCH "amd64")
+  elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
+    set(WEBGTK_DEB_ARCH "arm64")
+  else()
+    set(WEBGTK_DEB_ARCH "${CMAKE_SYSTEM_PROCESSOR}")
+  endif()
+endif()
+
+set(CPACK_PACKAGE_NAME "webgtk")
+set(CPACK_PACKAGE_VENDOR "M5Devs")
+set(CPACK_PACKAGE_CONTACT "M5Devs <webgtk-maintainers@users.noreply.github.com>")
+set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY
+    "Lightweight GTK webview built on a pruned Blink/V8 core")
+set(CPACK_PACKAGE_HOMEPAGE_URL "https://github.com/M5Devs/webgtk")
+set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE")
+set(CPACK_PACKAGE_FILE_NAME "webgtk-${PROJECT_VERSION}-linux-${WEBGTK_DEB_ARCH}")
+set(CPACK_GENERATOR "TGZ;DEB")
+set(CPACK_INCLUDE_TOPLEVEL_DIRECTORY ON)
+if(CMAKE_BUILD_TYPE STREQUAL "Release")
+  set(CPACK_STRIP_FILES TRUE)
+endif()
+
+# Debian control. The library dependencies are declared explicitly rather than
+# left to dpkg-shlibdeps: the pruned engine and the GTK stack are the contract
+# we want to state, and the t64 alternatives cover the time_t transition in
+# Debian 13 and Ubuntu 24.04 without pinning either spelling.
+set(CPACK_DEB_COMPONENT_INSTALL ON)
+set(CPACK_COMPONENTS_GROUPING IGNORE)
+set(CPACK_DEBIAN_ENABLE_COMPONENT_DEPENDS ON)
+set(CPACK_DEBIAN_PACKAGE_ARCHITECTURE "${WEBGTK_DEB_ARCH}")
+set(CPACK_DEBIAN_PACKAGE_RELEASE "1")
+set(CPACK_DEBIAN_FILE_NAME DEB-DEFAULT)
+set(WEBGTK_DEB_VERSION "${PROJECT_VERSION}-${CPACK_DEBIAN_PACKAGE_RELEASE}")
+
+set(CPACK_DEBIAN_RUNTIME_PACKAGE_NAME "${WEBGTK_RUNTIME_PACKAGE}")
+set(CPACK_DEBIAN_RUNTIME_PACKAGE_SECTION "libs")
+set(CPACK_DEBIAN_RUNTIME_PACKAGE_DEPENDS
+    "libc6, libgcc-s1, libstdc++6, \
+     libglib2.0-0t64 | libglib2.0-0, \
+     libgtk-3-0t64 | libgtk-3-0, libgtk-4-1, libepoxy0")
+set(CPACK_DEBIAN_RUNTIME_DESCRIPTION
+    "Runtime libraries for WebGTK.\n Ships libwebgtk.so (GTK3), libwebgtk4.so (GTK4) and the\n GObject Introspection typelibs.")
+
+set(CPACK_DEBIAN_DEVEL_PACKAGE_NAME "${WEBGTK_DEVEL_PACKAGE}")
+set(CPACK_DEBIAN_DEVEL_PACKAGE_SECTION "libdevel")
+set(CPACK_DEBIAN_DEVEL_PACKAGE_DEPENDS
+    "${WEBGTK_RUNTIME_PACKAGE} (= ${WEBGTK_DEB_VERSION}), \
+     libglib2.0-dev, libgtk-3-dev, libgtk-4-dev")
+set(CPACK_DEBIAN_DEVEL_DESCRIPTION
+    "Development files for WebGTK.\n The C ABI and GObject headers, the webgtk-1.0 and webgtk-4.0\n pkg-config files and the .gir data.")
+
+set(CPACK_DEBIAN_DEMO_PACKAGE_NAME "${WEBGTK_DEMO_PACKAGE}")
+set(CPACK_DEBIAN_DEMO_PACKAGE_SECTION "misc")
+set(CPACK_DEBIAN_DEMO_PACKAGE_DEPENDS
+    "${WEBGTK_RUNTIME_PACKAGE} (= ${WEBGTK_DEB_VERSION})")
+set(CPACK_DEBIAN_DEMO_DESCRIPTION
+    "GTK3 and GTK4 demo programs for WebGTK.")
+
+include(CPack)

@@ -4,6 +4,10 @@ build-*/
 out/
 cmake-build-*/
 
+# Packaging output (scripts/package_release.sh)
+dist/
+_CPack_Packages/
+
 # g-ir-scanner leaves a probe translation unit in the source tree on failure
 g-ir-cpp-*.c
 

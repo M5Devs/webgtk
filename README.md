@@ -18,6 +18,8 @@ examples/webgtk_demo.cc   Embedder demo, built for GTK3 and GTK4
 examples/demo.py          PyGObject demo, drives the typelib only
 tests/test_webgtk.c       C ABI and behaviour tests
 scripts/                  Engine download/build tooling and GN stubs
+scripts/package_release.sh  Release build plus CPack into dist/
+cmake/webgtk.pc.in        pkg-config template for the webgtk-1.0/-4.0 modules
 .github/workflows/        Engine build and publish pipeline
 docs/ENGINE.md            Engine integration notes and current status
 ```
@@ -185,6 +187,40 @@ window.add(view.widget)
 to a container is the read-only `widget` property. The flat C ABI in
 `<webgtk/webgtk.h>` stays dependency-free for embedders that only want the
 handful of functions.
+
+## Packaging and installation
+
+`cmake --install` writes a conventional layout: headers to `include/webgtk`,
+the versioned libraries and typelibs to `lib`, the pkg-config files to
+`lib/pkgconfig`, and the `.gir` data to `share/gir-1.0`.
+
+Consumers then find the library through pkg-config, one module per GTK major
+version:
+
+```sh
+cc app.c $(pkg-config --cflags --libs webgtk-1.0) -o app   # GTK3
+cc app.c $(pkg-config --cflags --libs webgtk-4.0) -o app   # GTK4
+```
+
+The `.pc` prefix is resolved from the file's own location (`${pcfiledir}`), so
+the install tree is relocatable: an unpacked tarball works from any path.
+
+`scripts/package_release.sh` builds in Release mode (no sanitizer runtimes, so
+the result links on a machine that does not have them) and runs CPack into
+`dist/`:
+
+```sh
+scripts/package_release.sh
+#   webgtk-<ver>-linux-<arch>.tar.gz   portable install tree
+#   libwebgtk0_<ver>-1_<arch>.deb      libwebgtk.so, libwebgtk4.so, typelibs
+#   libwebgtk-dev_<ver>-1_<arch>.deb   headers, .pc files, .gir, linker symlinks
+#   webgtk-demos_<ver>-1_<arch>.deb    gtk3-demo, gtk4-demo
+```
+
+The libraries carry a `libwebgtk.so.0` soname, so the runtime and development
+packages can be upgraded independently. The `.deb` dependencies are declared
+explicitly, with `t64` alternatives for the GLib/GTK packages renamed in Debian
+13 and Ubuntu 24.04.
 
 ## License
 

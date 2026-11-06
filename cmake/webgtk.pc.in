@@ -1,0 +1,14 @@
+# The prefix is derived from the .pc file's own location at query time, so the
+# installed tree is relocatable: pkg-config resolves includedir and libdir
+# wherever the tree is unpacked, with no install-time path baked in.
+prefix=${pcfiledir}/@WEBGTK_PC_PREFIX_FROM_PCDIR@
+exec_prefix=${prefix}
+libdir=${prefix}/@CMAKE_INSTALL_LIBDIR@
+includedir=${prefix}/@CMAKE_INSTALL_INCLUDEDIR@
+
+Name: @WEBGTK_PC_NAME@
+Description: @WEBGTK_PC_DESCRIPTION@
+Version: @PROJECT_VERSION@
+Requires: glib-2.0 gobject-2.0 @WEBGTK_PC_GTK_MODULE@
+Libs: -L${libdir} -l@WEBGTK_PC_LIBNAME@
+Cflags: -I${includedir}
