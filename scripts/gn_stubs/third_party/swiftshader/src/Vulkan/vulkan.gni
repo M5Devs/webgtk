@@ -1,0 +1,5 @@
+# Minimal stand-in for //third_party/swiftshader/src/Vulkan/vulkan.gni.
+# Stub created by scripts/patch_gn_stubs.sh for the pruned engine archive.
+# The archive drops the SwiftShader source; //third_party/angle reads this
+# single constant when it wires up the SwiftShader Vulkan ICD.
+swiftshader_icd_file_name = "vk_swiftshader_icd.json"

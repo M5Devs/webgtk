@@ -1,0 +1,60 @@
+# Stub created by scripts/patch_gn_stubs.sh for the pruned
+# engine archive: the real tree is absent, so these targets
+# are empty groups that keep dep labels resolvable.
+
+group("active_ice_controller_factory_interface") {
+}
+
+group("active_ice_controller_interface") {
+}
+
+group("basic_ice_controller") {
+}
+
+group("basic_packet_socket_factory") {
+}
+
+group("basic_port_allocator") {
+}
+
+group("candidate_pair_interface") {
+}
+
+group("connection") {
+}
+
+group("default_ice_transport_factory") {
+}
+
+group("ice_agent_interface") {
+}
+
+group("ice_controller_interface") {
+}
+
+group("ice_switch_reason") {
+}
+
+group("ice_transport_internal") {
+}
+
+group("p2p_constants") {
+}
+
+group("p2p_transport_channel") {
+}
+
+group("packet_transport_internal") {
+}
+
+group("port") {
+}
+
+group("port_allocator") {
+}
+
+group("port_interface") {
+}
+
+group("transport_description") {
+}

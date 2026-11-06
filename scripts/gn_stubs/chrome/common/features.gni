@@ -1,0 +1,31 @@
+# Minimal stand-in for //chrome/common/features.gni.
+# Stub created by scripts/patch_gn_stubs.sh for the pruned engine archive.
+#
+# The archive drops //chrome, but several WebUI BUILD.gn files import this
+# file expecting it to re-export the flags the real one pulls in. Keep the
+# imports whose files survive in the archive; WebGTK builds no Chrome WebUI,
+# so chrome_grit_defines is empty.
+
+import("//build/config/chrome_build.gni")
+import("//build/config/compiler/compiler.gni")
+import("//build/config/dcheck_always_on.gni")
+import("//build/config/features.gni")
+import("//components/compose/features.gni")
+import("//components/safe_browsing/buildflags.gni")
+import("//components/signin/features.gni")
+import("//components/supervised_user/buildflags.gni")
+import("//content/public/common/features.gni")
+import("//crypto/features.gni")
+import("//device/vr/buildflags/buildflags.gni")
+import("//extensions/buildflags/buildflags.gni")
+import("//media/media_options.gni")
+import("//net/features.gni")
+import("//pdf/features.gni")
+import("//printing/buildflags/buildflags.gni")
+import("//services/screen_ai/buildflags/features.gni")
+import("//services/webnn/public/webnn_features.gni")
+import("//third_party/blink/public/public_features.gni")
+import("//ui/base/ui_features.gni")
+import("//ui/webui/webui_features.gni")
+
+chrome_grit_defines = []

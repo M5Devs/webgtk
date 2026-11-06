@@ -1,0 +1,27 @@
+# Stub created by scripts/patch_gn_stubs.sh for the pruned
+# engine archive: the real tree is absent, so these targets
+# are empty groups that keep dep labels resolvable.
+
+group("codec") {
+}
+
+group("media_channel") {
+}
+
+group("media_constants") {
+}
+
+group("rtc_audio_video") {
+}
+
+group("rtc_internal_video_codecs") {
+}
+
+group("rtc_simulcast_encoder_adapter") {
+}
+
+group("rtp_utils") {
+}
+
+group("turn_utils") {
+}

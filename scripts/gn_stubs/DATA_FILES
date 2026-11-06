@@ -1,2 +1,6 @@
 chrome/VERSION
 chrome/app/theme/chromium/BRANDING
+chrome/app/app-Info.plist
+build/util/LASTCHANGE.committime
+third_party/rust-toolchain/VERSION
+third_party/llvm-build/Release+Asserts/cr_build_revision

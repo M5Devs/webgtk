@@ -1,0 +1,42 @@
+# Stub created by scripts/patch_gn_stubs.sh for the pruned
+# engine archive: the real tree is absent, so these targets
+# are empty groups that keep dep labels resolvable.
+
+group("adapted_video_track_source") {
+}
+
+group("encoded_image") {
+}
+
+group("recordable_encoded_frame") {
+}
+
+group("resolution") {
+}
+
+group("video_adapter") {
+}
+
+group("video_bitrate_allocation") {
+}
+
+group("video_broadcaster") {
+}
+
+group("video_codec_constants") {
+}
+
+group("video_common") {
+}
+
+group("video_frame") {
+}
+
+group("video_frame_metadata") {
+}
+
+group("video_frame_type") {
+}
+
+group("video_rtp_headers") {
+}

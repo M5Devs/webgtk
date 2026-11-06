@@ -1,0 +1,11 @@
+# Minimal stand-in for //third_party/nasm/nasm_assemble.gni.
+# Stub created by scripts/patch_gn_stubs.sh for the pruned engine archive.
+#
+# The real template assembles NASM sources for Windows x86/x64 builds. WebGTK
+# targets Linux, so every nasm_assemble() target expands to an inert source_set:
+# the target name stays resolvable and the missing .asm files are never listed.
+template("nasm_assemble") {
+  not_needed(invoker, "*")
+  source_set(target_name) {
+  }
+}

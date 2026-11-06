@@ -22,10 +22,16 @@ import sys
 MARKER = "Stub created by scripts/patch_gn_stubs.sh"
 
 # Small data files the stubs read that are not .gn/.gni and have no comment
-# syntax to carry the marker.
+# syntax to carry the marker. build/config/rust.gni and
+# build/config/compiler/BUILD.gn read the VERSION/revision files, and the
+# branding/plist files feed grit() and version generation.
 EXTRA_FILES = [
     "chrome/VERSION",
     "chrome/app/theme/chromium/BRANDING",
+    "chrome/app/app-Info.plist",
+    "build/util/LASTCHANGE.committime",
+    "third_party/rust-toolchain/VERSION",
+    "third_party/llvm-build/Release+Asserts/cr_build_revision",
 ]
 
 HERE = os.path.dirname(os.path.abspath(__file__))

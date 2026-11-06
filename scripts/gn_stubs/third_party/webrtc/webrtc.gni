@@ -1,0 +1,181 @@
+# Minimal stand-in for //third_party/webrtc/webrtc.gni.
+#
+# The archive drops the whole WebRTC tree, yet //content and //media import
+# this file at parse time and read its flags. The real file also pulls in a
+# long list of build configs and defines a dozen rtc_* target templates that
+# only exist to build WebRTC itself, which WebGTK never does. This stub keeps
+# the two things the importers actually need: the declared args (with the same
+# defaults the real file uses, so `if (rtc_use_pipewire)` style conditions
+# behave identically) and inert templates so any rtc_* target still resolves.
+
+import("//build/config/features.gni")
+import("//build/config/ozone.gni")
+import("//build/config/sysroot.gni")
+import("//build_overrides/build.gni")
+
+if (build_with_chromium) {
+  import("//media/media_options.gni")
+}
+
+declare_args() {
+  rtc_enable_symbol_export = false
+  rtc_use_absl_mutex = false
+  rtc_dlog_always_on = false
+  rtc_disable_logging = false
+  rtc_disable_metrics = false
+  rtc_disable_trace_events = false
+  rtc_disable_check_msg = false
+  rtc_exclude_metrics_default = build_with_chromium
+  rtc_exclude_system_time = build_with_chromium
+  rtc_enable_protobuf = true
+  rtc_enable_sctp = true
+  rtc_enable_google_benchmarks = true
+  rtc_include_tests = !build_with_chromium
+  rtc_build_examples = true
+  rtc_build_tools = true
+  rtc_build_cc_test_bins = true
+  rtc_build_json = true
+  rtc_build_libsrtp = true
+  rtc_build_libvpx = true
+  rtc_build_opus = true
+  rtc_build_ssl = true
+  rtc_builtin_ssl_root_certificates = !build_with_chromium
+  rtc_build_with_neon = false
+  rtc_libvpx_build_vp9 = true
+  rtc_include_opus = true
+  rtc_include_builtin_audio_codecs = true
+  rtc_include_dav1d_in_internal_decoder_factory = true
+  rtc_include_internal_audio_device = !build_with_chromium
+  rtc_include_pulse_audio = !build_with_chromium
+  rtc_use_dummy_audio_file_devices = false
+  rtc_audio_device_plays_sinus_tone = false
+  rtc_opus_support_120ms_ptime = true
+  rtc_opus_variable_complexity = false
+  rtc_use_h264 = media_use_openh264
+  rtc_use_h265 = enable_hevc_parser_and_hw_decoder || proprietary_codecs
+  rtc_use_pipewire = is_linux && use_sysroot
+  rtc_link_pipewire = false
+  rtc_use_x11 = ozone_platform_x11
+  rtc_use_perfetto = false
+  rtc_system_openh264 = false
+  rtc_video_psnr = true
+  rtc_enable_avx2 = false
+  rtc_enable_android_aaudio = false
+  rtc_enable_win_wgc = is_win
+  rtc_exclude_audio_processing_module = false
+  rtc_ios_use_opengl_rendering = false
+  rtc_win_undef_unicode = false
+  rtc_rust = true
+  rtc_sanitize_coverage = ""
+  rtc_ssl_root = ""
+  rtc_jsoncpp_root = "//third_party/jsoncpp/source/include"
+  rtc_objc_prefix = ""
+  rtc_strict_field_trials = ""
+  rtc_common_public_deps = []
+  apm_debug_dump = false
+  deprecate_plan_b = true
+  build_with_mozilla = false
+}
+
+# Args whose default reads another arg. GN forbids that inside one
+# declare_args() call, so the real file splits them the same way.
+declare_args() {
+  rtc_enable_objc_symbol_export = rtc_enable_symbol_export
+  rtc_use_x11_extensions = rtc_use_x11
+  rtc_enable_grpc = rtc_enable_protobuf && (is_linux || is_mac)
+  rtc_build_dcsctp = rtc_enable_sctp
+}
+
+# Points at //third_party/webrtc in a Chromium checkout, as the real file does.
+webrtc_root = get_path_info(".", "abspath")
+
+# The real file points these at configs defined by //third_party/webrtc, which
+# the archive does not carry. Nothing WebGTK builds consumes an rtc_* target,
+# so the lists stay empty rather than naming configs that do not exist.
+rtc_common_configs = []
+rtc_common_inherited_config = ""
+rtc_remove_configs = []
+rtc_add_configs = []
+rtc_prod_configs = []
+rtc_library_impl_config = []
+
+rtc_libvpx_dir = "//third_party/libvpx"
+rtc_opus_dir = "//third_party/opus"
+
+rtc_desktop_capture_supported =
+    (is_win && current_os != "winuwp") || is_mac ||
+    ((is_linux || is_chromeos) && (rtc_use_x11_extensions || rtc_use_pipewire))
+
+# Every rtc_* template expands to an inert group: the target name stays
+# resolvable, and no WebRTC sources or configs are pulled in.
+template("rtc_source_set") {
+  not_needed(invoker, "*")
+  group(target_name) {
+  }
+}
+
+template("rtc_static_library") {
+  not_needed(invoker, "*")
+  group(target_name) {
+  }
+}
+
+template("rtc_library") {
+  not_needed(invoker, "*")
+  group(target_name) {
+  }
+}
+
+template("rtc_executable") {
+  not_needed(invoker, "*")
+  group(target_name) {
+  }
+}
+
+template("rtc_shared_library") {
+  not_needed(invoker, "*")
+  group(target_name) {
+  }
+}
+
+template("rtc_test") {
+  not_needed(invoker, "*")
+  group(target_name) {
+  }
+}
+
+template("rtc_cc_test") {
+  not_needed(invoker, "*")
+  group(target_name) {
+  }
+}
+
+template("rtc_test_suite") {
+  not_needed(invoker, "*")
+  group(target_name) {
+  }
+}
+
+template("rtc_rust_library") {
+  not_needed(invoker, "*")
+  group(target_name) {
+  }
+}
+
+template("rtc_rust_unittest") {
+  not_needed(invoker, "*")
+  group(target_name) {
+  }
+}
+
+template("rtc_rust_cxx_bridge") {
+  not_needed(invoker, "*")
+  group(target_name) {
+  }
+}
+
+template("rtc_rust_test_suite") {
+  not_needed(invoker, "*")
+  group(target_name) {
+  }
+}

@@ -1,0 +1,13 @@
+# Minimal stand-in for //third_party/libsrtp/options.gni.
+# Stub created by scripts/patch_gn_stubs.sh for the pruned engine archive.
+#
+# The real file declares the libsrtp build flags. //third_party/webrtc/pc
+# asserts libsrtp_build_boringssl == rtc_build_ssl, and rtc_build_ssl defaults
+# to true in //third_party/webrtc/webrtc.gni, so mirror that here.
+declare_args() {
+  libsrtp_build_boringssl = true
+  libsrtp_openssl = false
+  # //third_party/webrtc/pc asserts this matches rtc_ssl_root (default is the
+  # BoringSSL include dir).
+  libsrtp_ssl_root = ""
+}

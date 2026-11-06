@@ -1,0 +1,19 @@
+# Minimal stand-in for //mojo/public/tools/fuzzers/mojolpm.gni.
+# Stub created by scripts/patch_gn_stubs.sh for the pruned engine archive.
+#
+# enable_mojom_fuzzer is declared in //mojo/public/tools/bindings/mojom.gni and
+# reaches //components/viz/service through this file, so the import stays.
+#
+# The real mojolpm_fuzzer_test() needs the libFuzzer runtime and generated
+# mojolpm protos the archive does not carry; WebGTK builds no fuzz targets, so
+# the template expands to an inert group.
+import("//mojo/public/tools/bindings/mojom.gni")
+# Re-export the fuzzer/test templates the way the real file does, so BUILD.gn
+# files that only import mojolpm.gni still see test() and rust helpers.
+import("//testing/libfuzzer/fuzzer_test.gni")
+
+template("mojolpm_fuzzer_test") {
+  not_needed(invoker, "*")
+  group(target_name) {
+  }
+}

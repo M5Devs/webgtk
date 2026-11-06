@@ -1,0 +1,4 @@
+rustc 1.101.0 8a9dd7abdf013ec10cfeaaa3685feba18ef1c90c (8a9dd7abdf013ec10cfeaaa3685feba18ef1c90c-6-llvmorg-24-init-14453-ge063be79 chromium)
+crubit: 976349ab38ef144ac8f9f6ab63a8ef62185e71b8
+bindgen: 73c69d681eec90b84ffba4f993b5fb2f19580781
+

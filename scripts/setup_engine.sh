@@ -74,18 +74,46 @@ fi
 
 # ------------------------------------------------------------------- perfetto
 # The archive ships third_party/perfetto as an empty placeholder; restore it at
-# the exact revision chromium/DEPS pins.
+# the exact revision chromium/DEPS pins. android.googlesource.com refuses to
+# serve this revision by name, so fetch the single commit (the mirrors do
+# serve it) instead of cloning the default branch and checking out.
+fetch_perfetto() {
+  local dest="$1" url
+  for url in "$PERFETTO_URL" "$PERFETTO_MIRROR" \
+             "https://chromium.googlesource.com/external/github.com/google/perfetto.git"; do
+    rm -rf "$dest"
+    if git init -q "$dest" &&
+       git -C "$dest" remote add origin "$url" &&
+       git -C "$dest" fetch -q --depth 1 origin "$PERFETTO_REV" &&
+       git -C "$dest" checkout -q FETCH_HEAD; then
+      rm -rf "$dest/.git"
+      return 0
+    fi
+    echo "note: fetch of $PERFETTO_REV from $url failed, trying next mirror" >&2
+  done
+  return 1
+}
+
 if [ ! -f "$SRC_DIR/third_party/perfetto/BUILD.gn" ]; then
   log "Restoring third_party/perfetto at $PERFETTO_REV"
-  rm -rf "$SRC_DIR/third_party/perfetto"
-  if ! git clone "$PERFETTO_URL" "$SRC_DIR/third_party/perfetto"; then
-    echo "note: android.googlesource.com failed, retrying via GitHub mirror" >&2
-    rm -rf "$SRC_DIR/third_party/perfetto"
-    git clone "$PERFETTO_MIRROR" "$SRC_DIR/third_party/perfetto"
-  fi
-  git -C "$SRC_DIR/third_party/perfetto" checkout "$PERFETTO_REV"
+  fetch_perfetto "$SRC_DIR/third_party/perfetto" || {
+    echo "error: could not fetch perfetto at $PERFETTO_REV" >&2
+    exit 1
+  }
 else
   log "perfetto already restored"
+fi
+
+# ----------------------------------------------------------- host interpreter
+# .gn sets script_executable to //third_party/cpython3/host/bin/python3, the
+# hermetic interpreter a full checkout ships. The archive keeps the directory
+# metadata but drops the binary, so point it at the system python3 (gn only
+# needs it to run exec_script helpers such as build/config/linux/pkg-config.py).
+CPYTHON="$SRC_DIR/third_party/cpython3/host/bin/python3"
+if [ ! -e "$CPYTHON" ]; then
+  log "Linking $CPYTHON to the system python3"
+  mkdir -p "$(dirname "$CPYTHON")"
+  ln -sf "$(command -v python3)" "$CPYTHON"
 fi
 
 # ------------------------------------------------------------------- GN binary

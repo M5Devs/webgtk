@@ -1,0 +1,18 @@
+# Stub created by scripts/patch_gn_stubs.sh for the pruned
+# engine archive: the real tree is absent, so these targets
+# are empty groups that keep dep labels resolvable.
+
+group("ice_server_parsing") {
+}
+
+group("media_session") {
+}
+
+group("rtc_pc") {
+}
+
+group("session_description") {
+}
+
+group("webrtc_sdp") {
+}

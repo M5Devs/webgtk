@@ -1,0 +1,7 @@
+# Minimal stand-in for //remoting/remoting_enable.gni.
+# Stub created by scripts/patch_gn_stubs.sh for the pruned engine archive.
+# The real file declares the enable_remoting build flag; the archive drops the
+# rest of //remoting but several BUILD.gn files read the flag.
+declare_args() {
+  enable_remoting = false
+}

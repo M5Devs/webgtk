@@ -1,0 +1,15 @@
+# Stub created by scripts/patch_gn_stubs.sh for the pruned
+# engine archive: the real tree is absent, so these targets
+# are empty groups that keep dep labels resolvable.
+
+group("scalability_mode_util") {
+}
+
+group("scalability_structures") {
+}
+
+group("scalable_video_controller") {
+}
+
+group("simulcast_to_svc_converter") {
+}

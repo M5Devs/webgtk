@@ -1,0 +1,15 @@
+# Stub created by scripts/patch_gn_stubs.sh for the pruned
+# engine archive: the real tree is absent, so these targets
+# are empty groups that keep dep labels resolvable.
+
+group("audio_decoder_multiopus") {
+}
+
+group("audio_decoder_opus") {
+}
+
+group("audio_encoder_multiopus") {
+}
+
+group("audio_encoder_opus") {
+}

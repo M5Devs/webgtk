@@ -1,0 +1,8 @@
+# Minimal stand-in for //content/test/fuzzer/content_mojolpm_fuzzer_test.gni.
+# Stub created by scripts/patch_gn_stubs.sh for the pruned engine archive.
+# Same rationale as //mojo/public/tools/fuzzers/mojolpm.gni: no fuzz targets.
+template("content_mojolpm_fuzzer_test") {
+  not_needed(invoker, "*")
+  group(target_name) {
+  }
+}

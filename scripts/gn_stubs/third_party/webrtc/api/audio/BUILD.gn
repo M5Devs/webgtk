@@ -1,0 +1,27 @@
+# Stub created by scripts/patch_gn_stubs.sh for the pruned
+# engine archive: the real tree is absent, so these targets
+# are empty groups that keep dep labels resolvable.
+
+group("aec3_config") {
+}
+
+group("aec3_factory") {
+}
+
+group("audio_device") {
+}
+
+group("audio_frame_api") {
+}
+
+group("audio_processing") {
+}
+
+group("builtin_audio_processing_builder") {
+}
+
+group("neural_residual_echo_estimator_creator") {
+}
+
+group("tflite_model_handle") {
+}

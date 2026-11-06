@@ -1,0 +1,93 @@
+# Stub created by scripts/patch_gn_stubs.sh for the pruned
+# engine archive: the real tree is absent, so these targets
+# are empty groups that keep dep labels resolvable.
+
+group("async_dns_resolver") {
+}
+
+group("async_packet_socket") {
+}
+
+group("buffer") {
+}
+
+group("byte_order") {
+}
+
+group("copy_on_write_buffer") {
+}
+
+group("cpu_info") {
+}
+
+group("crypto_random") {
+}
+
+group("data_rate_limiter") {
+}
+
+group("event_tracer") {
+}
+
+group("ip_address") {
+}
+
+group("logging") {
+}
+
+group("mdns_responder_interface") {
+}
+
+group("net_helper") {
+}
+
+group("net_helpers") {
+}
+
+group("net_test_helpers") {
+}
+
+group("network") {
+}
+
+group("network_route") {
+}
+
+group("refcount") {
+}
+
+group("rtc_certificate_generator") {
+}
+
+group("socket") {
+}
+
+group("socket_address") {
+}
+
+group("socket_factory") {
+}
+
+group("socket_server") {
+}
+
+group("ssl") {
+}
+
+group("ssl_adapter") {
+}
+
+group("stringutils") {
+}
+
+group("threading") {
+}
+
+group("timestamp_aligner") {
+}
+
+group("timeutils") {
+}
+
+group("weak_ptr") {
+}

@@ -1,0 +1,144 @@
+# Stub created by scripts/patch_gn_stubs.sh for the pruned
+# engine archive: the real tree is absent, so these targets
+# are empty groups that keep dep labels resolvable.
+
+group("async_dns_resolver") {
+}
+
+group("candidate") {
+}
+
+group("create_modular_peer_connection_factory") {
+}
+
+group("data_channel_event_observer_interface") {
+}
+
+group("data_channel_interface") {
+}
+
+group("datagram_connection") {
+}
+
+group("datagram_connection_factory") {
+}
+
+group("dtls_transport_interface") {
+}
+
+group("dtmf_sender_interface") {
+}
+
+group("enable_media") {
+}
+
+group("enable_media_with_defaults") {
+}
+
+group("fec_controller_api") {
+}
+
+group("field_trials_view") {
+}
+
+group("frame_transformer_factory") {
+}
+
+group("frame_transformer_interface") {
+}
+
+group("ice_transport_factory") {
+}
+
+group("ice_transport_interface") {
+}
+
+group("jsep") {
+}
+
+group("legacy_stats_types") {
+}
+
+group("libjingle_logging_api") {
+}
+
+group("local_network_access_permission") {
+}
+
+group("location") {
+}
+
+group("make_ref_counted") {
+}
+
+group("media_stream_interface") {
+}
+
+group("network_state_predictor_api") {
+}
+
+group("packet_socket_factory") {
+}
+
+group("peer_connection_interface") {
+}
+
+group("priority") {
+}
+
+group("rtc_error") {
+}
+
+group("rtc_stats_api") {
+}
+
+group("rtp_header_extension_id") {
+}
+
+group("rtp_headers") {
+}
+
+group("rtp_packet_info") {
+}
+
+group("rtp_parameters") {
+}
+
+group("rtp_receiver_interface") {
+}
+
+group("rtp_sender_interface") {
+}
+
+group("rtp_transceiver_direction") {
+}
+
+group("rtp_transceiver_interface") {
+}
+
+group("scoped_refptr") {
+}
+
+group("sctp_transport_interface") {
+}
+
+group("set_local_description_observer_interface") {
+}
+
+group("set_remote_description_observer_interface") {
+}
+
+group("simulated_network_api") {
+}
+
+group("transport_api") {
+}
+
+group("turn_customizer") {
+}
+
+group("video_track_source_constraints") {
+}
+
+group("video_track_source_proxy_factory") {
+}

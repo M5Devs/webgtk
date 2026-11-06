@@ -34,7 +34,7 @@ def main():
               file=sys.stderr)
         return 2
 
-    written = skipped = 0
+    written = 0
     data_files = set()
     data_list = os.path.join(SRC_DIR, "DATA_FILES")
     if os.path.exists(data_list):
@@ -47,17 +47,20 @@ def main():
             src = os.path.join(dirpath, name)
             rel = os.path.relpath(src, SRC_DIR)
             dest = os.path.join(root, rel)
+            # The snapshot is authoritative: a file lands here only because the
+            # pruned archive cannot parse without it. Some, like
+            # //net/third_party/quiche/BUILD.gn, replace a real file the archive
+            # ships that fails on a missing import, so overwrite rather than
+            # trust a marker.
             if rel not in data_files and os.path.exists(dest):
                 with open(dest, encoding="utf-8", errors="replace") as f:
                     if MARKER not in f.read(4096):
-                        print(f"  keep real file {rel}")
-                        skipped += 1
-                        continue
+                        print(f"  replace real file {rel}")
             os.makedirs(os.path.dirname(dest), exist_ok=True)
             shutil.copyfile(src, dest)
             written += 1
 
-    print(f"applied {written} stubs ({skipped} real files left alone)")
+    print(f"applied {written} stubs")
     return 0
 
 

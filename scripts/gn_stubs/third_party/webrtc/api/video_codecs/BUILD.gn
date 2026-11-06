@@ -1,0 +1,15 @@
+# Stub created by scripts/patch_gn_stubs.sh for the pruned
+# engine archive: the real tree is absent, so these targets
+# are empty groups that keep dep labels resolvable.
+
+group("builtin_video_decoder_factory") {
+}
+
+group("rtc_software_fallback_wrappers") {
+}
+
+group("scalability_mode") {
+}
+
+group("video_codecs_api") {
+}
