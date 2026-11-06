@@ -674,31 +674,6 @@ webgtk_status chromium_send_key_event(void *self,
   return WEBGTK_OK;
 }
 
-webgtk_status chromium_send_scroll_event(void *self,
-                                         const webgtk_scroll_event *event) {
-  auto *backend = static_cast<ChromiumBackend *>(self);
-  if (!backend || !event) return WEBGTK_ERROR_INVALID_ARGUMENT;
-  backend->PostToEngine(base::BindOnce(
-      [](ChromiumBackend *b, webgtk_scroll_event ev) {
-        if (!b->web_contents) return;
-        content::WebContents *contents = ToWebContents(b->web_contents);
-        if (!contents) return;
-        content::RenderWidgetHost *host =
-            contents->GetPrimaryMainFrame()->GetRenderWidgetHost();
-        if (!host) return;
-        WebMouseWheelEvent wheel;
-        wheel.SetType(WebInputEvent::Type::kMouseWheel);
-        wheel.SetModifiers(blink_modifiers(ev.modifiers));
-        wheel.SetTimeStamp(base::TimeTicks::Now());
-        wheel.delta_x = static_cast<float>(ev.dx);
-        wheel.delta_y = static_cast<float>(ev.dy);
-        wheel.delta_units = ui::ScrollGranularity::kScrollByPixel;
-        host->ForwardWheelEvent(wheel);
-      },
-      backend, *event));
-  return WEBGTK_OK;
-}
-
 webgtk_status chromium_send_focus_event(void *self, int focused) {
   auto *backend = static_cast<ChromiumBackend *>(self);
   if (!backend) return WEBGTK_ERROR_INVALID_ARGUMENT;
@@ -761,7 +736,10 @@ const BackendOps kChromiumOps = {
     &chromium_text_input,
     &chromium_send_mouse_event,
     &chromium_send_key_event,
-    &chromium_send_scroll_event,
+    // send_scroll_event stays NULL: webgtk_scroll_event carries no
+    // coordinates, so the view's scalar fallback (which uses the recorded
+    // pointer position) is what gives the engine a real hit-test point.
+    nullptr,
     &chromium_send_focus_event,
     &chromium_add_script_message_handler,
     &chromium_remove_script_message_handler,
