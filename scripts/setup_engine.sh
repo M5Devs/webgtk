@@ -2,12 +2,16 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 #
 # Fetch and prepare the pruned Chromium engine used by the WebGTK Chromium
-# backend, then generate the GN build files for //content.
+# backend, then generate the GN build files for the WebGTK renderer-only root
+# target (//third_party/blink/renderer/webgtk:webgtk_engine).
 #
 # Usage:
-#   scripts/setup_engine.sh [--dir <engine-root>] [--no-deps] [--no-gen]
+#   scripts/setup_engine.sh [--dir <engine-root>] [--root-target <label>]
+#                           [--no-deps] [--no-gen]
 #
 # The engine root defaults to $WEBGTK_ENGINE_DIR, or <repo>/engine when unset.
+# The root target defaults to the V3 renderer-only target; pass
+# --root-target=//content for the full embedder closure.
 # After a successful run the tree looks like:
 #
 #   <engine-root>/chromium/            pruned Chromium checkout
@@ -19,7 +23,13 @@
 
 set -euo pipefail
 
-ARCHIVE_URL="https://huggingface.co/datasets/M5-Dev/webgtk-chromium-diet/resolve/main/webgtk_core_v2.tar.gz"
+# V3 (webgtk_core_v3.tar.gz) carries the WebGTK engine prune: the shared
+# webgtk.gni args, the renderer-only root target, and the Blink platform
+# media/WebRTC/WebGPU/XR amputation. scripts/apply_engine_patch.py re-applies
+# that source patch after extraction; it is idempotent, so it is a no-op on the
+# already-patched V3 archive and a repair for any older archive.
+ARCHIVE_URL="https://huggingface.co/datasets/M5-Dev/webgtk-chromium-diet/resolve/main/webgtk_core_v3.tar.gz"
+DEFAULT_ROOT_TARGET="//third_party/blink/renderer/webgtk:webgtk_engine"
 PERFETTO_URL="https://android.googlesource.com/platform/external/perfetto.git"
 # Mirrors github.com/google/perfetto.git; same commits.
 PERFETTO_MIRROR="https://github.com/google/perfetto.git"
@@ -34,15 +44,17 @@ GN_PACKAGE="gn/gn/linux-amd64"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENGINE_DIR="${WEBGTK_ENGINE_DIR:-$REPO_ROOT/engine}"
+ROOT_TARGET="$DEFAULT_ROOT_TARGET"
 DO_DEPS=1
 DO_GEN=1
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --dir) ENGINE_DIR="$2"; shift 2 ;;
+    --root-target) ROOT_TARGET="$2"; shift 2 ;;
     --no-deps) DO_DEPS=0; shift ;;
     --no-gen) DO_GEN=0; shift ;;
-    -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,23p' "$0"; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
@@ -69,14 +81,21 @@ mkdir -p "$ENGINE_DIR"
 
 # ---------------------------------------------------------------- source tree
 if [ ! -d "$SRC_DIR/content" ]; then
-  log "Downloading engine archive"
-  wget -c --progress=dot:giga -O "$ENGINE_DIR/webgtk_core_v2.tar.gz" "$ARCHIVE_URL"
+  log "Downloading engine archive (V3)"
+  wget -c --progress=dot:giga -O "$ENGINE_DIR/webgtk_core_v3.tar.gz" "$ARCHIVE_URL"
   log "Extracting engine archive"
-  tar -xzf "$ENGINE_DIR/webgtk_core_v2.tar.gz" -C "$ENGINE_DIR"
-  rm -f "$ENGINE_DIR/webgtk_core_v2.tar.gz"
+  tar -xzf "$ENGINE_DIR/webgtk_core_v3.tar.gz" -C "$ENGINE_DIR"
+  rm -f "$ENGINE_DIR/webgtk_core_v3.tar.gz"
 else
   log "Engine source tree already present at $SRC_DIR"
 fi
+
+# ------------------------------------------------------- WebGTK engine prune
+# Re-apply the V3 source patch (webgtk.gni, the renderer-only root target, and
+# the Blink platform media/WebRTC/WebGPU/XR amputation). Idempotent, so it is
+# safe on an already-patched tree.
+log "Applying the WebGTK V3 engine prune"
+"$REPO_ROOT/scripts/apply_engine_patch.py" "$SRC_DIR"
 
 # ------------------------------------------------------------------- perfetto
 # The archive ships third_party/perfetto as an empty placeholder; restore it at
@@ -192,8 +211,11 @@ if [ "$DO_GEN" = 0 ]; then
 fi
 
 # ---------------------------------------------------------------------- gn gen
-# Diet flags: content-only root target, no component build, no printing/PDF/
-# extensions, no thin LTO, system sysroot, no Vulkan/remoting.
+# V3 diet flags: renderer-only root target, no component build, no printing/
+# PDF/extensions/plugins, no thin LTO, system sysroot, no Vulkan/remoting/VR,
+# headless-only Ozone, no FFmpeg/libvpx/aom/dav1d/symphonia/VA-API media
+# decoders, no WebNN tflite/litert backends, and the WebGTK engine prune
+# (webgtk_strip_platform_media_capture) enabled.
 #
 # enable_nacl and enable_webrtc no longer exist as build args at this revision,
 # so passing them only produces "no effect" warnings; the features are dropped
@@ -209,10 +231,17 @@ DIET_ARGS='is_debug=false is_component_build=false symbol_level=0
 enable_printing=false enable_pdf=false
 enable_extensions=false use_thin_lto=false use_sysroot=false
 enable_webui_ntp=false enable_vulkan=false enable_remoting=false
-use_kerberos=false enable_rust=true'
+use_kerberos=false enable_rust=true
+media_use_ffmpeg=false enable_ffmpeg_video_decoders=false
+media_use_libvpx=false enable_libaom=false enable_dav1d_decoder=false
+media_use_symphonia=false use_vaapi=false enable_media_remoting=false
+ozone_platform_wayland=false ozone_platform_headless=true
+webnn_use_tflite=false webnn_use_litert=false use_litert_tflite=false
+enable_vr=false enable_plugins=false
+webgtk_strip_platform_media_capture=true'
 DIET_ARGS="$(echo $DIET_ARGS)"
 
-log "Running gn gen (root target //content)"
+log "Running gn gen (root target $ROOT_TARGET)"
 cd "$SRC_DIR"
 # GN loads ~140 files the pruned archive drops, even though WebGTK never builds
 # those subtrees. scripts/patch_gn_stubs.sh writes the hand-written ones and
@@ -220,10 +249,10 @@ cd "$SRC_DIR"
 log "Restoring missing GN files"
 "$REPO_ROOT/scripts/patch_gn_stubs.sh" "$SRC_DIR"
 "$REPO_ROOT/scripts/apply_gn_stubs.py" "$SRC_DIR"
-if "$GN" gen out/webgtk --root-target=//content --args="$DIET_ARGS"; then
+if "$GN" gen out/webgtk --root-target="$ROOT_TARGET" --args="$DIET_ARGS"; then
   log "gn gen succeeded: $SRC_DIR/out/webgtk"
   echo "Build the engine with:"
-  echo "  ninja -C $SRC_DIR/out/webgtk content"
+  echo "  ninja -C $SRC_DIR/out/webgtk $ROOT_TARGET"
 else
   log "gn gen failed"
   cat <<'EOF'
