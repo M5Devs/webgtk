@@ -179,18 +179,26 @@ else
 fi
 
 # ------------------------------------------------------- compile-time sources
-# Three more things the archive drops, whose files the *compile* needs (gn gen
-# never touches them, so the stub driver cannot see them):
+# More things the archive drops, whose files the *compile* needs (gn gen never
+# touches them, so the stub driver cannot see them):
 #   * third_party/boringssl/src      -- openssl/*.h. base/rand_util.h includes
 #                                       third_party/boringssl/src/include/...,
 #                                       a path the archive leaves empty.
 #   * third_party/vulkan-headers/src -- vulkan/vk_platform.h, reached through
 #                                       ANGLE's bundled volk.
+#   * net/third_party/quiche/src     -- net/http/structured_headers.h and
+#                                       net/base/net_error_details.h include
+#                                       quiche headers by path. Disabling QUIC
+#                                       does not remove the references.
+#   * third_party/lss                -- linux_syscall_support.h, included by
+#                                       the sandbox/seccomp code.
 #   * base/test/scoped_logging_settings.h -- base/logging.cc includes it (and
 #                                       defines the class); base/test/ is
 #                                       otherwise dropped and stubbed.
 BORINGSSL_REV="5d165bc0408b977a80247598834cddd2c99b788f"      # pin from chromium/DEPS
 VULKAN_HEADERS_REV="9fbc2a782ee3f8a4db64e7d991e23da75e893f44"  # pin from chromium/DEPS
+QUICHE_REV="68734d74229794063a5631b2f9318146b06b595e"          # pin from chromium/DEPS
+LSS_REV="29164a80da4d41134950d76d55199ea33fbb9613"             # pin from chromium/DEPS
 
 if [ ! -f "$SRC_DIR/third_party/boringssl/src/include/openssl/rand.h" ]; then
   log "Restoring third_party/boringssl at $BORINGSSL_REV"
@@ -212,6 +220,28 @@ if [ ! -f "$SRC_DIR/third_party/vulkan-headers/src/include/vulkan/vk_platform.h"
   }
 else
   log "vulkan-headers already restored"
+fi
+
+if [ ! -f "$SRC_DIR/net/third_party/quiche/src/quiche/common/structured_headers.h" ]; then
+  log "Restoring net/third_party/quiche at $QUICHE_REV"
+  fetch_pinned "$SRC_DIR/net/third_party/quiche/src" "$QUICHE_REV" \
+    "https://quiche.googlesource.com/quiche" || {
+    echo "error: could not fetch quiche at $QUICHE_REV" >&2
+    exit 1
+  }
+else
+  log "quiche already restored"
+fi
+
+if [ ! -f "$SRC_DIR/third_party/lss/linux_syscall_support.h" ]; then
+  log "Restoring third_party/lss at $LSS_REV"
+  fetch_pinned "$SRC_DIR/third_party/lss" "$LSS_REV" \
+    "https://chromium.googlesource.com/linux-syscall-support" || {
+    echo "error: could not fetch lss at $LSS_REV" >&2
+    exit 1
+  }
+else
+  log "lss already restored"
 fi
 
 if [ ! -f "$SRC_DIR/base/test/scoped_logging_settings.h" ]; then
