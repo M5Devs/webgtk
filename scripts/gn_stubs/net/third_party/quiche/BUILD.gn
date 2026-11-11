@@ -4,32 +4,57 @@
 # Only these targets are referenced from outside //net/third_party/quiche,
 # so they are the ones that must stay resolvable for `gn gen`.
 
+
+# The quiche *sources* are restored at build time by scripts/setup_engine.sh,
+# because translation units in //net include quiche headers by path even when
+# QUIC is disabled. So this stub must also expose quiche's include directories
+# (the real BUILD.gn does this through :quiche_config); without them those
+# includes fail with "file not found".
+config("quiche_config") {
+  include_dirs = [
+    # Order matters: overrides/ replaces headers in src/common/platform/default.
+    "overrides",
+    "src/quiche/common/platform/default",
+    "src",
+  ]
+}
+
 group("quiche") {
+  public_configs = [ ":quiche_config" ]
 }
 
 group("quiche_tool_support") {
+  public_configs = [ ":quiche_config" ]
 }
 
 group("blind_sign_auth") {
+  public_configs = [ ":quiche_config" ]
 }
 
 group("quiche_tests") {
+  public_configs = [ ":quiche_config" ]
 }
 
 group("quiche_test_support") {
+  public_configs = [ ":quiche_config" ]
 }
 
 group("quic_server_core") {
+  public_configs = [ ":quiche_config" ]
 }
 
 group("quic_client_core") {
+  public_configs = [ ":quiche_config" ]
 }
 
 group("net_quic_test_tools_proto") {
+  public_configs = [ ":quiche_config" ]
 }
 
 group("blind_sign_auth_test_support") {
+  public_configs = [ ":quiche_config" ]
 }
 
 group("blind_sign_auth_proto") {
+  public_configs = [ ":quiche_config" ]
 }
