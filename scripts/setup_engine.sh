@@ -40,6 +40,10 @@ PERFETTO_REV="5ca4307bd65b26906313b664d7efd7f3729c7767"  # pin from chromium/DEP
 LIBCXX_URL="https://chromium.googlesource.com/external/github.com/llvm/llvm-project/libcxx"
 LIBCXX_MIRROR="https://github.com/llvm/llvm-project.git"
 LIBCXX_REV="9ba7713d3a0f1e179904c984bb626748b15e57d6"  # pin from chromium/DEPS
+# libc++'s <charconv> sources include "shared/fp_bits.h", which lives in the
+# llvm-libc repo (DEPS: src/third_party/llvm-libc/src), not in libc++.
+LLVM_LIBC_URL="https://chromium.googlesource.com/external/github.com/llvm/llvm-project/libc"
+LLVM_LIBC_REV="058c23f04d56417fceefbdb21fdd31ac1aeb028f"  # pin from chromium/DEPS
 GN_PACKAGE="gn/gn/linux-amd64"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -135,23 +139,43 @@ fi
 # The archive drops third_party/libc++/src, but the compile-verification build
 # (scripts/verify_engine.sh) needs the headers: gn's compile flags pass
 # -nostdinc++ and -isystem the libc++ include directory, so without them every
-# standard-library header fails to resolve. Restore the headers at the exact
-# revision chromium/DEPS pins; the library sources are not needed.
-if [ ! -d "$SRC_DIR/third_party/libc++/src/include" ]; then
-  log "Restoring third_party/libc++ headers at $LIBCXX_REV"
+# standard-library header fails to resolve. Restore the full upstream checkout
+# at the exact revision chromium/DEPS pins -- headers *and* the src/ tree.
+#
+# src/ is not optional: the pruned tree still compiles libc++'s own .cpp files
+# (charconv.cpp, filesystem, ...), and src/include/from_chars_floating_point.h
+# is part of src/, not include/.
+if [ ! -f "$SRC_DIR/third_party/libc++/src/src/charconv.cpp" ]; then
+  log "Restoring third_party/libc++ at $LIBCXX_REV"
   LIBCXX_TMP="$ENGINE_DIR/.libcxx-fetch"
   fetch_pinned "$LIBCXX_TMP" "$LIBCXX_REV" "$LIBCXX_URL" "$LIBCXX_MIRROR" || {
     echo "error: could not fetch libc++ at $LIBCXX_REV" >&2
     exit 1
   }
-  mkdir -p "$SRC_DIR/third_party/libc++/src"
-  cp -a "$LIBCXX_TMP/include" "$SRC_DIR/third_party/libc++/src/include"
-  rm -rf "$LIBCXX_TMP"
+  rm -rf "$SRC_DIR/third_party/libc++/src"
+  mv "$LIBCXX_TMP" "$SRC_DIR/third_party/libc++/src"
   # gn generates __config_site from buildtools/third_party/libc++/__config_site.
   cp "$SRC_DIR/buildtools/third_party/libc++/__config_site" \
      "$SRC_DIR/third_party/libc++/src/include/__config_site"
 else
-  log "libc++ headers already restored"
+  log "libc++ already restored"
+fi
+
+# ------------------------------------------------------------------ llvm-libc
+# libc++'s <charconv> headers include "shared/fp_bits.h", which lives in the
+# llvm-libc repo (DEPS: src/third_party/llvm-libc/src), not in libc++. The
+# archive drops it, so without this every charconv translation unit fails.
+if [ ! -f "$SRC_DIR/third_party/llvm-libc/src/shared/fp_bits.h" ]; then
+  log "Restoring third_party/llvm-libc at $LLVM_LIBC_REV"
+  LLVM_LIBC_TMP="$ENGINE_DIR/.libc-fetch"
+  fetch_pinned "$LLVM_LIBC_TMP" "$LLVM_LIBC_REV" "$LLVM_LIBC_URL" || {
+    echo "error: could not fetch llvm-libc at $LLVM_LIBC_REV" >&2
+    exit 1
+  }
+  rm -rf "$SRC_DIR/third_party/llvm-libc/src"
+  mv "$LLVM_LIBC_TMP" "$SRC_DIR/third_party/llvm-libc/src"
+else
+  log "llvm-libc already restored"
 fi
 
 # ----------------------------------------------------------- host interpreter
@@ -227,11 +251,15 @@ fi
 # unconditionally, and build/rust asserts on enable_rust, so a false value
 # aborts gn gen. The archive keeps third_party/rust-toolchain, which is all gn
 # needs at generation time.
+# skia_use_dawn defaults true on Linux, which pulls Skia's Graphite-Dawn backend
+# and its <webgpu/webgpu_cpp.h> include. The pruned archive has no Dawn headers,
+# and a static-content webview never rasterizes through WebGPU, so disable it.
 DIET_ARGS='is_debug=false is_component_build=false symbol_level=0
 enable_printing=false enable_pdf=false
 enable_extensions=false use_thin_lto=false use_sysroot=false
 enable_webui_ntp=false enable_vulkan=false enable_remoting=false
 use_kerberos=false enable_rust=true
+skia_use_dawn=false
 media_use_ffmpeg=false enable_ffmpeg_video_decoders=false
 media_use_libvpx=false enable_libaom=false enable_dav1d_decoder=false
 media_use_symphonia=false use_vaapi=false enable_media_remoting=false
