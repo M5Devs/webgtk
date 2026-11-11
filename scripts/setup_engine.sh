@@ -178,6 +178,58 @@ else
   log "llvm-libc already restored"
 fi
 
+# ------------------------------------------------------- compile-time sources
+# Three more things the archive drops, whose files the *compile* needs (gn gen
+# never touches them, so the stub driver cannot see them):
+#   * third_party/boringssl/src      -- openssl/*.h. base/rand_util.h includes
+#                                       third_party/boringssl/src/include/...,
+#                                       a path the archive leaves empty.
+#   * third_party/vulkan-headers/src -- vulkan/vk_platform.h, reached through
+#                                       ANGLE's bundled volk.
+#   * base/test/scoped_logging_settings.h -- base/logging.cc includes it (and
+#                                       defines the class); base/test/ is
+#                                       otherwise dropped and stubbed.
+BORINGSSL_REV="5d165bc0408b977a80247598834cddd2c99b788f"      # pin from chromium/DEPS
+VULKAN_HEADERS_REV="9fbc2a782ee3f8a4db64e7d991e23da75e893f44"  # pin from chromium/DEPS
+
+if [ ! -f "$SRC_DIR/third_party/boringssl/src/include/openssl/rand.h" ]; then
+  log "Restoring third_party/boringssl at $BORINGSSL_REV"
+  fetch_pinned "$SRC_DIR/third_party/boringssl/src" "$BORINGSSL_REV" \
+    "https://boringssl.googlesource.com/boringssl" || {
+    echo "error: could not fetch boringssl at $BORINGSSL_REV" >&2
+    exit 1
+  }
+else
+  log "boringssl already restored"
+fi
+
+if [ ! -f "$SRC_DIR/third_party/vulkan-headers/src/include/vulkan/vk_platform.h" ]; then
+  log "Restoring third_party/vulkan-headers at $VULKAN_HEADERS_REV"
+  fetch_pinned "$SRC_DIR/third_party/vulkan-headers/src" "$VULKAN_HEADERS_REV" \
+    "https://chromium.googlesource.com/external/github.com/KhronosGroup/Vulkan-Headers" || {
+    echo "error: could not fetch vulkan-headers at $VULKAN_HEADERS_REV" >&2
+    exit 1
+  }
+else
+  log "vulkan-headers already restored"
+fi
+
+if [ ! -f "$SRC_DIR/base/test/scoped_logging_settings.h" ]; then
+  log "Restoring base/test/scoped_logging_settings.h"
+  CHROMIUM_TAG="$(awk -F= '/^MAJOR=/{m=$2} /^MINOR=/{n=$2} /^BUILD=/{b=$2} \
+    /^PATCH=/{p=$2} END{print m"."n"."b"."p}' "$SRC_DIR/chrome/VERSION" 2>/dev/null)"
+  [ -n "$CHROMIUM_TAG" ] || CHROMIUM_TAG="143.0.7499.0"
+  mkdir -p "$SRC_DIR/base/test"
+  curl -fsSL \
+    "https://chromium.googlesource.com/chromium/src/+/refs/tags/$CHROMIUM_TAG/base/test/scoped_logging_settings.h?format=TEXT" \
+    | base64 -d > "$SRC_DIR/base/test/scoped_logging_settings.h" || {
+    echo "error: could not fetch base/test/scoped_logging_settings.h" >&2
+    exit 1
+  }
+else
+  log "scoped_logging_settings.h already restored"
+fi
+
 # ----------------------------------------------------------- host interpreter
 # .gn sets script_executable to //third_party/cpython3/host/bin/python3, the
 # hermetic interpreter a full checkout ships. The archive keeps the directory
