@@ -26,7 +26,7 @@
 
 set -euo pipefail
 
-ARCHIVE_URL="https://huggingface.co/datasets/M5-Dev/webgtk-chromium-diet/resolve/main/webgtk_core_v2.tar.gz"
+ARCHIVE_URL="https://huggingface.co/datasets/M5-Dev/webgtk-chromium-diet/resolve/main/webgtk_core_v3.tar.gz"
 PERFETTO_URL="https://android.googlesource.com/platform/external/perfetto.git"
 PERFETTO_MIRROR="https://github.com/google/perfetto.git"
 PERFETTO_REV="5ca4307bd65b26906313b664d7efd7f3729c7767"
@@ -87,9 +87,9 @@ is_cfi=false chrome_pgo_phase=0'
 if [ ! -d "$SRC_DIR/content" ]; then
   log "Downloading engine archive"
   mkdir -p "$ENGINE_DIR"
-  wget -c --progress=dot:giga -O "$ENGINE_DIR/webgtk_core_v2.tar.gz" "$ARCHIVE_URL"
-  tar -xzf "$ENGINE_DIR/webgtk_core_v2.tar.gz" -C "$ENGINE_DIR"
-  rm -f "$ENGINE_DIR/webgtk_core_v2.tar.gz"
+  wget -c --progress=dot:giga -O "$ENGINE_DIR/webgtk_core_v3.tar.gz" "$ARCHIVE_URL"
+  tar -xzf "$ENGINE_DIR/webgtk_core_v3.tar.gz" -C "$ENGINE_DIR"
+  rm -f "$ENGINE_DIR/webgtk_core_v3.tar.gz"
 fi
 
 # --------------------------------------------------------------------- restore
