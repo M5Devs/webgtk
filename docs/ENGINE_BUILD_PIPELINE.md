@@ -1,12 +1,37 @@
 # Engine build pipeline
 
 How the pruned Chromium engine archive is taken from a tarball to a compiled
-`//content` tree, and how the build repairs itself when the pruning removed
+renderer-only tree, and how the build repairs itself when the pruning removed
 something it needs.
 
 `docs/ENGINE.md` covers the *integration* seam (how WebGTK links a prebuilt
 engine). This document covers the *build*: producing that engine from the
-archive in `engine/webgtk_core_v2.tar.gz`.
+archive in `engine/webgtk_core_v3.tar.gz`.
+
+## The V3 baseline
+
+WebGTK embeds the offscreen (OSR) rendering stack only: Blink (DOM/CSS/layout),
+V8, Skia, and the graphics plumbing that produces a surface. The V3 prune
+narrows the build to a **renderer-only root target**,
+`//third_party/blink/renderer/webgtk:webgtk_engine`, and amputates the
+subsystems a static-content webview never calls (WebXR, WebRTC, media capture,
+WebGPU/Dawn, on-device language detection).
+
+The decisive lever is *not* the media amputation but the root target: the full
+`//content` graph pulls Blink's `controller -> modules` edge, which drags in
+every Web API module. Measured on this archive (static graph analysis, `gn gen`
+only):
+
+| build | root target | ninja edges | `.o` | `ninja -t commands` |
+| --- | --- | ---: | ---: | ---: |
+| baseline | `//content` | 83,073 | 27,988 | 31,814 |
+| diet flags | `//content` | 81,651 | 27,268 | 30,972 |
+| **V3** | `webgtk_engine` | **61,705** | **17,423** | **20,027** |
+
+That is a **−37.7 %** reduction in compiled objects versus the `//content`
+baseline. The prune is a *source* patch, not a stock Chromium argument; the
+archive carries it, and `scripts/apply_engine_patch.py` re-applies it after
+extraction.
 
 ## Why a self-healing build
 
@@ -50,14 +75,21 @@ re-run this first in a fresh session.
 
 ### 2. Source tree and GN files — `setup_engine.sh`
 
-Downloads `webgtk_core_v2.tar.gz` from Hugging Face, extracts it, restores the
-source dependencies GN needs at generation time (`third_party/perfetto`,
-libc++ headers), installs the GN binary via CIPD, and runs `gn gen` for
-`//content`.
+Downloads `webgtk_core_v3.tar.gz` from Hugging Face, extracts it, re-applies the
+V3 engine prune (`scripts/apply_engine_patch.py`), restores the source
+dependencies GN needs at generation time (`third_party/perfetto`, libc++
+headers), installs the GN binary via CIPD, and runs `gn gen` for the renderer-only
+root target.
 
 ```sh
-scripts/setup_engine.sh [--dir <engine-root>] [--no-deps] [--no-gen]
+scripts/setup_engine.sh [--dir <engine-root>] [--root-target <label>] \
+                        [--no-deps] [--no-gen]
 ```
+
+`--root-target` defaults to
+`//third_party/blink/renderer/webgtk:webgtk_engine`; pass `--root-target=//content`
+for the full embedder closure. The V3 archive already carries the prune, so the
+patch step is a no-op on it and a repair for any older archive.
 
 `gn gen` needs empty stand-in `BUILD.gn` files for the subtrees the archive
 dropped, because a build file it does need still imports them at parse time.
@@ -106,11 +138,13 @@ flag files. Without it, ninja cannot even plan the build.
 
 ```sh
 python3 scripts/engine_autoheal.py <engine-root> [--out out/webgtk] \
-    [--target content] [--jobs N]
+    [--target third_party/blink/renderer/webgtk:webgtk_engine] [--jobs N]
 ```
 
 It runs `ninja -k 0 <target>`, reads the first unresolved input, classifies it,
 repairs it, and re-runs. Progress and every repair are printed as they happen.
+The `--target` defaults to `content`; for the V3 tree pass the renderer-only root
+target.
 
 ## What the driver repairs
 
@@ -155,7 +189,8 @@ command loses at most the objects in flight.
 
 ## Requirements
 
-A `//content` build is large. Measured on the archive:
+A `//content` build is large; the V3 renderer-only target is roughly a third
+smaller. Measured on the archive:
 
 | resource | minimum | comfortable |
 | --- | --- | --- |
@@ -163,9 +198,9 @@ A `//content` build is large. Measured on the archive:
 | RAM | 8 GB | 16 GB |
 | cores | 4 | 16+ |
 
-The extracted source tree is ~7.6 GB and `out/webgtk` grows past 15 GB. With 4
-cores, expect the compile to run for many hours; it is a background job, not an
-interactive one.
+The extracted source tree is ~7.6 GB and `out/webgtk` grows past 15 GB for
+`//content` (less for the renderer-only target). With 4 cores, expect the
+compile to run for many hours; it is a background job, not an interactive one.
 
 `--jobs` caps parallelism. On a memory-limited machine, keep it below the core
 count: some translation units (v8, blink) need a few GB each.
@@ -195,7 +230,8 @@ dependency-restore and compile; later runs only build what changed.
 | file | role |
 | --- | --- |
 | `scripts/setup_gn_env.sh` | host apt libraries, `gn gen` support files |
-| `scripts/setup_engine.sh` | archive fetch/extract, source deps, `gn gen` |
+| `scripts/setup_engine.sh` | archive fetch/extract, engine prune, source deps, `gn gen` |
+| `scripts/apply_engine_patch.py` | re-apply the V3 source prune (idempotent) |
 | `scripts/setup_toolchain.sh` | clang, rust, node, typescript, mold |
 | `scripts/engine_autoheal.py` | ninja driver and dependency repair |
 | `scripts/apply_gn_stubs.py` | replay the frozen GN stub snapshot |

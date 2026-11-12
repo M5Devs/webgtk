@@ -62,18 +62,35 @@ fi
 # The tree's own updater reads CLANG_REVISION from tools/clang/scripts/update.py
 # (which matches the revision chromium/DEPS pins) and unpacks the compiler,
 # its plugins and the compiler-rt builtins into third_party/llvm-build.
+#
+# The archive ships clang's *stamp file* (cr_build_revision) but not the
+# compiler, so the updater's "already installed" check passes and it installs
+# nothing. Clear a stamp whose binary is missing before running it.
 log "Installing Chromium Clang"
-( cd "$SRC_DIR" && python3 tools/clang/scripts/update.py )
 CLANG="$SRC_DIR/third_party/llvm-build/Release+Asserts/bin/clang"
+CLANG_STAMP="$SRC_DIR/third_party/llvm-build/Release+Asserts/cr_build_revision"
+if [ ! -x "$CLANG" ] && [ -e "$CLANG_STAMP" ]; then
+  log "  removing stale clang stamp (binary absent)"
+  rm -f "$CLANG_STAMP"
+fi
+( cd "$SRC_DIR" && python3 tools/clang/scripts/update.py )
 [ -x "$CLANG" ] || die "clang not installed at $CLANG"
 "$CLANG" --version | head -1
 
 # -------------------------------------------------------------------- Rust
 # enable_rust=true in the gn args, so the Rust toolchain is required. The
 # updater installs the exact rustc/cargo chromium/DEPS pins.
+#
+# Same stamp trap as clang: the archive ships third_party/rust-toolchain/VERSION
+# but not the binaries, so clear the stamp when rustc is missing.
 log "Installing the Chromium Rust toolchain"
-( cd "$SRC_DIR" && python3 tools/rust/update_rust.py )
 RUSTC="$SRC_DIR/third_party/rust-toolchain/bin/rustc"
+RUST_STAMP="$SRC_DIR/third_party/rust-toolchain/VERSION"
+if [ ! -x "$RUSTC" ] && [ -e "$RUST_STAMP" ]; then
+  log "  removing stale rust stamp (rustc absent)"
+  rm -f "$RUST_STAMP"
+fi
+( cd "$SRC_DIR" && python3 tools/rust/update_rust.py )
 [ -x "$RUSTC" ] || die "rustc not installed at $RUSTC"
 "$RUSTC" --version
 

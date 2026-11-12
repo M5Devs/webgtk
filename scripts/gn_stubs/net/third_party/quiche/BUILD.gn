@@ -4,32 +4,78 @@
 # Only these targets are referenced from outside //net/third_party/quiche,
 # so they are the ones that must stay resolvable for `gn gen`.
 
+
+# The quiche *sources* are restored at build time by scripts/setup_engine.sh,
+# because translation units in //net include quiche headers by path even when
+# QUIC is disabled. So this stub must also:
+#   * expose quiche's include directories (the real BUILD.gn does this through
+#     :quiche_config);
+#   * keep :net_quic_proto, which generates the quiche .pb.h files that
+#     quic_session.h / quic_crypto_stream.h include.
+# Without either, those includes fail with "file not found".
+import("//third_party/protobuf/proto_library.gni")
+
+config("quiche_config") {
+  include_dirs = [
+    # Order matters: overrides/ replaces headers in src/common/platform/default.
+    "overrides",
+    "src/quiche/common/platform/default",
+    "src",
+  ]
+}
+
+# Mirrors upstream's proto_library of the same name; //net links the generated
+# objects through :quiche.
+proto_library("net_quic_proto") {
+  sources = [
+    "src/quiche/quic/core/proto/cached_network_parameters.proto",
+    "src/quiche/quic/core/proto/crypto_server_config.proto",
+    "src/quiche/quic/core/proto/source_address_token.proto",
+  ]
+  cc_generator_options = "dllexport_decl=COMPONENT_EXPORT(QUICHE):"
+  cc_include = "base/component_export.h"
+  component_build_force_source_set = true
+  proto_in_dir = "src"
+  defines = [ "IS_QUICHE_IMPL" ]
+}
+
 group("quiche") {
+  public_configs = [ ":quiche_config" ]
+  public_deps = [ ":net_quic_proto" ]
 }
 
 group("quiche_tool_support") {
+  public_configs = [ ":quiche_config" ]
 }
 
 group("blind_sign_auth") {
+  public_configs = [ ":quiche_config" ]
 }
 
 group("quiche_tests") {
+  public_configs = [ ":quiche_config" ]
 }
 
 group("quiche_test_support") {
+  public_configs = [ ":quiche_config" ]
 }
 
 group("quic_server_core") {
+  public_configs = [ ":quiche_config" ]
 }
 
 group("quic_client_core") {
+  public_configs = [ ":quiche_config" ]
 }
 
 group("net_quic_test_tools_proto") {
+  public_configs = [ ":quiche_config" ]
 }
 
 group("blind_sign_auth_test_support") {
+  public_configs = [ ":quiche_config" ]
 }
 
 group("blind_sign_auth_proto") {
+  public_configs = [ ":quiche_config" ]
 }
